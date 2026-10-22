@@ -168,6 +168,77 @@ public static class ToolCatalog
             }
             """),
         new ToolSpec(
+            "renga_create_door",
+            "Create a door",
+            "Creates a door hosted on a wall. Coordinates, width, and height are in meters. The wall must already exist.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "wallId": { "type": "integer", "description": "Local ID of the host wall." },
+                "x": { "type": "number", "description": "Door center X on the wall, in meters." },
+                "y": { "type": "number", "description": "Door center Y on the wall, in meters." },
+                "width": { "type": "number", "description": "Door width in meters." },
+                "height": { "type": "number", "description": "Door height in meters." },
+                "offset": { "type": "number", "description": "Optional vertical offset from the level in meters. Default 0." }
+              },
+              "required": ["wallId", "x", "y", "width", "height"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_window",
+            "Create a window",
+            "Creates a window hosted on a wall. Coordinates, width, height, and sill are in meters. The wall must already exist.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "wallId": { "type": "integer", "description": "Local ID of the host wall." },
+                "x": { "type": "number", "description": "Window center X on the wall, in meters." },
+                "y": { "type": "number", "description": "Window center Y on the wall, in meters." },
+                "width": { "type": "number", "description": "Window width in meters." },
+                "height": { "type": "number", "description": "Window height in meters." },
+                "sill": { "type": "number", "description": "Optional sill height from the level in meters. Default 0.9." }
+              },
+              "required": ["wallId", "x", "y", "width", "height"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_roof",
+            "Create a flat roof",
+            "Creates a flat roof slab on a level from a closed polygon or a rectangle. Points are in meters, thickness and offset are in meters. Provide either points or x1, y1, x2, y2.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "thickness": { "type": "number", "description": "Roof thickness in meters." },
+                "offset": { "type": "number", "description": "Optional roof base elevation above the level in meters. Default 0." },
+                "points": {
+                  "type": "array",
+                  "description": "Closed or open polygon of at least 3 points in meters.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "x": { "type": "number" },
+                      "y": { "type": "number" }
+                    },
+                    "required": ["x", "y"],
+                    "additionalProperties": false
+                  }
+                },
+                "x1": { "type": "number", "description": "Rectangle corner 1 X in meters." },
+                "y1": { "type": "number", "description": "Rectangle corner 1 Y in meters." },
+                "x2": { "type": "number", "description": "Rectangle corner 2 X in meters." },
+                "y2": { "type": "number", "description": "Rectangle corner 2 Y in meters." }
+              },
+              "required": ["levelId", "thickness"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
             "renga_create_floor",
             "Create a floor slab",
             "Creates a floor (перекрытие) on a level from a closed polygon or a rectangle. Points and thickness are in meters. Provide either points or x1, y1, x2, y2.",

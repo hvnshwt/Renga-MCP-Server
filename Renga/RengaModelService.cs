@@ -492,6 +492,274 @@ public sealed class RengaModelService
         }
     }
 
+    public object CreateDoor(
+        int wallId,
+        double x,
+        double y,
+        double widthMeters,
+        double heightMeters,
+        double? offsetMeters)
+    {
+        var px = Units.ToMillimeters(RequireFinite(x, "x"));
+        var py = Units.ToMillimeters(RequireFinite(y, "y"));
+        var widthMm = Units.ToMillimeters(RequireFinite(widthMeters, "width"));
+        var heightMm = Units.ToMillimeters(RequireFinite(heightMeters, "height"));
+        var offsetMm = Units.ToMillimeters(RequireFinite(offsetMeters ?? 0, "offset"));
+        if (widthMm <= 0 || heightMm <= 0)
+        {
+            throw new RengaException("Door width and height must be positive.");
+        }
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var wall = FindObject(model, wallId)
+            ?? throw new RengaException($"Wall with ID {wallId} was not found.");
+        if (wall.ObjectType != RengaIds.Wall)
+        {
+            throw new RengaException($"Object {wallId} is not a wall.");
+        }
+
+        var direction = GetWallDirection(wall);
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = model.CreateNewEntityArgs();
+            args.TypeId = RengaIds.Door;
+            args.HostObjectId = wallId;
+            args.StyleId = 0;
+            args.Placement3D = new Placement3D
+            {
+                Origin = new Point3D { X = px, Y = py, Z = offsetMm },
+                xAxis = new Vector3D { X = direction.X, Y = direction.Y, Z = 0 },
+                zAxis = new Vector3D { X = 0, Y = 0, Z = 1 }
+            };
+
+            var door = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the door. " + _connector.LastError);
+
+            SetDoubleParameter(door, RengaParams.DoorWidth, widthMm);
+            SetDoubleParameter(door, RengaParams.DoorHeight, heightMm);
+            SetDoubleParameter(door, RengaParams.Offset, offsetMm);
+
+            op.Apply();
+            applied = true;
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = door.Id,
+                ["uniqueId"] = door.UniqueIdS,
+                ["type"] = door.ObjectTypeS,
+                ["wallId"] = wallId,
+                ["x"] = x,
+                ["y"] = y,
+                ["width"] = widthMeters,
+                ["height"] = heightMeters,
+                ["offset"] = Units.ToMeters(offsetMm)
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object CreateWindow(
+        int wallId,
+        double x,
+        double y,
+        double widthMeters,
+        double heightMeters,
+        double? sillMeters)
+    {
+        var px = Units.ToMillimeters(RequireFinite(x, "x"));
+        var py = Units.ToMillimeters(RequireFinite(y, "y"));
+        var widthMm = Units.ToMillimeters(RequireFinite(widthMeters, "width"));
+        var heightMm = Units.ToMillimeters(RequireFinite(heightMeters, "height"));
+        var sillMm = Units.ToMillimeters(RequireFinite(sillMeters ?? 0.9, "sill"));
+        if (widthMm <= 0 || heightMm <= 0)
+        {
+            throw new RengaException("Window width and height must be positive.");
+        }
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var wall = FindObject(model, wallId)
+            ?? throw new RengaException($"Wall with ID {wallId} was not found.");
+        if (wall.ObjectType != RengaIds.Wall)
+        {
+            throw new RengaException($"Object {wallId} is not a wall.");
+        }
+
+        var direction = GetWallDirection(wall);
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = model.CreateNewEntityArgs();
+            args.TypeId = RengaIds.Window;
+            args.HostObjectId = wallId;
+            args.StyleId = 0;
+            args.Placement3D = new Placement3D
+            {
+                Origin = new Point3D { X = px, Y = py, Z = sillMm },
+                xAxis = new Vector3D { X = direction.X, Y = direction.Y, Z = 0 },
+                zAxis = new Vector3D { X = 0, Y = 0, Z = 1 }
+            };
+
+            var window = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the window. " + _connector.LastError);
+
+            SetDoubleParameter(window, RengaParams.WindowWidth, widthMm);
+            SetDoubleParameter(window, RengaParams.WindowHeight, heightMm);
+            SetDoubleParameter(window, RengaParams.Offset, sillMm);
+
+            op.Apply();
+            applied = true;
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = window.Id,
+                ["uniqueId"] = window.UniqueIdS,
+                ["type"] = window.ObjectTypeS,
+                ["wallId"] = wallId,
+                ["x"] = x,
+                ["y"] = y,
+                ["width"] = widthMeters,
+                ["height"] = heightMeters,
+                ["sill"] = Units.ToMeters(sillMm)
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object CreateRoof(
+        int levelId,
+        double thicknessMeters,
+        IReadOnlyList<(double X, double Y)>? points,
+        double? x1,
+        double? y1,
+        double? x2,
+        double? y2,
+        double? offsetMeters)
+    {
+        var thicknessMm = Units.ToMillimeters(RequireFinite(thicknessMeters, "thickness"));
+        var offsetMm = Units.ToMillimeters(RequireFinite(offsetMeters ?? 0, "offset"));
+        if (thicknessMm <= 0)
+        {
+            throw new RengaException("Roof thickness must be positive.");
+        }
+
+        IReadOnlyList<(double X, double Y)> contour;
+        if (points is { Count: >= 3 })
+        {
+            contour = points;
+        }
+        else if (x1 is double rx1 && y1 is double ry1 && x2 is double rx2 && y2 is double ry2)
+        {
+            contour = new[]
+            {
+                (rx1, ry1),
+                (rx2, ry1),
+                (rx2, ry2),
+                (rx1, ry2)
+            };
+        }
+        else
+        {
+            throw new RengaException("Provide either a points array with at least 3 points or x1, y1, x2, y2.");
+        }
+
+        var polygon = contour
+            .Select(point => (
+                X: Units.ToMillimeters(RequireFinite(point.X, "point.x")),
+                Y: Units.ToMillimeters(RequireFinite(point.Y, "point.y"))))
+            .ToList();
+
+        if (polygon.Count > 1 &&
+            Math.Abs(polygon[0].X - polygon[^1].X) < 1e-6 &&
+            Math.Abs(polygon[0].Y - polygon[^1].Y) < 1e-6)
+        {
+            polygon.RemoveAt(polygon.Count - 1);
+        }
+
+        if (polygon.Count < 3)
+        {
+            throw new RengaException("Roof contour requires at least 3 distinct points.");
+        }
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var level = FindLevel(model, levelId)
+            ?? throw new RengaException($"Level with ID {levelId} was not found.");
+        var levelName = ((ILevel)level).LevelName;
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = model.CreateNewEntityArgs();
+            args.TypeId = RengaIds.Roof;
+            args.HostObjectId = levelId;
+            args.Placement3D = IdentityPlacement();
+
+            var roof = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the roof. " + _connector.LastError);
+
+            if (roof is not IBaseline2DObject baseline)
+            {
+                throw new RengaException("The created roof does not expose IBaseline2DObject.");
+            }
+
+            baseline.SetBaseline(CreateClosedPolygon(polygon));
+            SetDoubleParameter(roof, RengaParams.RoofThickness, thicknessMm);
+            SetDoubleParameter(roof, RengaParams.Offset, offsetMm);
+
+            op.Apply();
+            applied = true;
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = roof.Id,
+                ["uniqueId"] = roof.UniqueIdS,
+                ["type"] = roof.ObjectTypeS,
+                ["levelId"] = levelId,
+                ["levelName"] = levelName,
+                ["thickness"] = thicknessMeters,
+                ["offset"] = Units.ToMeters(offsetMm),
+                ["points"] = polygon
+                    .Select(point => new { x = Units.ToMeters(point.X), y = Units.ToMeters(point.Y) })
+                    .ToArray(),
+                ["area"] = PolygonArea(polygon) / 1_000_000.0
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
     public object CreateFloor(
         int levelId,
         double thicknessMeters,
@@ -1061,6 +1329,40 @@ public sealed class RengaModelService
     private static bool IsLevel(IModelObject obj) => obj.ObjectType == RengaIds.Level;
 
     private static bool IsAxis(IModelObject obj) => obj.ObjectType == RengaIds.Axis;
+
+    private static IModelObject? FindObject(IModel model, int objectId)
+    {
+        var objects = model.GetObjects();
+        for (var i = 0; i < objects.Count; i++)
+        {
+            var obj = objects.GetByIndex(i);
+            if (obj.Id == objectId)
+            {
+                return obj;
+            }
+        }
+
+        return null;
+    }
+
+    private static (double X, double Y) GetWallDirection(IModelObject wall)
+    {
+        if (wall is not ILevelObject levelObject)
+        {
+            throw new RengaException($"Wall {wall.Id} does not expose ILevelObject.");
+        }
+
+        var placement = levelObject.GetPlacement();
+        var x = placement.AxisX.X;
+        var y = placement.AxisX.Y;
+        var length = Math.Sqrt(x * x + y * y);
+        if (length < 1e-9)
+        {
+            throw new RengaException($"Wall {wall.Id} has an invalid placement direction.");
+        }
+
+        return (x / length, y / length);
+    }
 
     private static IModelObject? FindLevel(IModel model, int levelId)
     {
