@@ -1,0 +1,534 @@
+using System.Globalization;
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using RengaMcpServer.Renga;
+
+namespace RengaMcpServer.Mcp;
+
+public sealed class McpServer
+{
+    private static readonly JsonSerializerOptions ProtocolJson = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    private static readonly JsonSerializerOptions PrettyJson = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    private readonly RengaModelService _service;
+    private readonly StreamReader _input;
+    private readonly StreamWriter _output;
+
+    public McpServer(RengaModelService service)
+    {
+        _service = service;
+        _input = new StreamReader(
+            Console.OpenStandardInput(),
+            new UTF8Encoding(false),
+            detectEncodingFromByteOrderMarks: false);
+        _output = new StreamWriter(
+            Console.OpenStandardOutput(),
+            new UTF8Encoding(false))
+        {
+            AutoFlush = true,
+            NewLine = "\n"
+        };
+    }
+
+    public void Run()
+    {
+        Log("MCP server is listening on stdio");
+        string? message;
+        while ((message = ReadMessage()) is not null)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                continue;
+            }
+
+            Handle(message);
+        }
+
+        Log("stdin closed; server exiting");
+    }
+
+    private void Handle(string message)
+    {
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(message);
+        }
+        catch (JsonException ex)
+        {
+            SendError(null, -32700, "Parse error", ex.Message);
+            return;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                SendError(null, -32600, "Invalid Request");
+                return;
+            }
+
+            var hasId = root.TryGetProperty("id", out var id) && id.ValueKind != JsonValueKind.Null;
+            if (!root.TryGetProperty("method", out var methodElement) ||
+                methodElement.ValueKind != JsonValueKind.String)
+            {
+                if (hasId)
+                {
+                    SendError(id, -32600, "Invalid Request");
+                }
+
+                return;
+            }
+
+            var method = methodElement.GetString() ?? string.Empty;
+            if (!hasId)
+            {
+                HandleNotification(method);
+                return;
+            }
+
+            try
+            {
+                switch (method)
+                {
+                    case "initialize":
+                        SendResult(id, Initialize(root));
+                        break;
+                    case "ping":
+                        SendResult(id, new Dictionary<string, object?>());
+                        break;
+                    case "tools/list":
+                        SendResult(id, ListTools());
+                        break;
+                    case "tools/call":
+                        HandleToolCall(id, root);
+                        break;
+                    case "resources/list":
+                        SendResult(id, new Dictionary<string, object?> { ["resources"] = Array.Empty<object>() });
+                        break;
+                    case "resources/templates/list":
+                        SendResult(id, new Dictionary<string, object?> { ["resourceTemplates"] = Array.Empty<object>() });
+                        break;
+                    case "prompts/list":
+                        SendResult(id, new Dictionary<string, object?> { ["prompts"] = Array.Empty<object>() });
+                        break;
+                    case "logging/setLevel":
+                        SendResult(id, new Dictionary<string, object?>());
+                        break;
+                    default:
+                        SendError(id, -32601, $"Method not found: {method}");
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Request {method} failed: {ex}");
+                SendError(id, -32603, "Internal error", ex.Message);
+            }
+        }
+    }
+
+    private void HandleNotification(string method)
+    {
+        if (string.Equals(method, "notifications/initialized", StringComparison.Ordinal))
+        {
+            Log("Client completed initialization");
+            return;
+        }
+
+        Log($"Ignored notification: {method}");
+    }
+
+    private object Initialize(JsonElement root)
+    {
+        var protocolVersion = "2025-06-18";
+        if (root.TryGetProperty("params", out var parameters) &&
+            parameters.ValueKind == JsonValueKind.Object &&
+            parameters.TryGetProperty("protocolVersion", out var version) &&
+            version.ValueKind == JsonValueKind.String)
+        {
+            protocolVersion = version.GetString() ?? protocolVersion;
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["protocolVersion"] = protocolVersion,
+            ["capabilities"] = new Dictionary<string, object?>
+            {
+                ["tools"] = new Dictionary<string, object?>
+                {
+                    ["listChanged"] = false
+                }
+            },
+            ["serverInfo"] = new Dictionary<string, object?>
+            {
+                ["name"] = "renga-mcp-server",
+                ["version"] = "1.0.0"
+            },
+            ["instructions"] =
+                "Use renga_ping to check the connection and renga_new_project to start. " +
+                "Create all levels and axes before creating walls, columns, beams, or floors. " +
+                "All user-facing coordinates, elevations, heights, and thicknesses are in meters."
+        };
+    }
+
+    private object ListTools()
+    {
+        var tools = ToolCatalog.Tools.Select(tool => new Dictionary<string, object?>
+        {
+            ["name"] = tool.Name,
+            ["title"] = tool.Title,
+            ["description"] = tool.Description,
+            ["inputSchema"] = ParseSchema(tool.SchemaJson)
+        }).ToArray();
+
+        return new Dictionary<string, object?> { ["tools"] = tools };
+    }
+
+    private static JsonElement ParseSchema(string schema)
+    {
+        using var document = JsonDocument.Parse(schema);
+        return document.RootElement.Clone();
+    }
+
+    private void HandleToolCall(JsonElement id, JsonElement root)
+    {
+        if (!root.TryGetProperty("params", out var parameters) ||
+            parameters.ValueKind != JsonValueKind.Object ||
+            !parameters.TryGetProperty("name", out var nameElement) ||
+            nameElement.ValueKind != JsonValueKind.String)
+        {
+            SendError(id, -32602, "Invalid params: tools/call requires a tool name");
+            return;
+        }
+
+        var name = nameElement.GetString() ?? string.Empty;
+        var tool = ToolCatalog.Tools.FirstOrDefault(item =>
+            string.Equals(item.Name, name, StringComparison.Ordinal));
+        if (tool is null)
+        {
+            SendError(id, -32602, $"Unknown tool: {name}");
+            return;
+        }
+
+        var arguments = parameters.TryGetProperty("arguments", out var args) &&
+                        args.ValueKind == JsonValueKind.Object
+            ? args
+            : default;
+
+        Log($"Calling {name}");
+        try
+        {
+            var result = Dispatch(name, arguments);
+            var text = JsonSerializer.Serialize(result, PrettyJson);
+            SendResult(id, new Dictionary<string, object?>
+            {
+                ["content"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["type"] = "text",
+                        ["text"] = text
+                    }
+                },
+                ["isError"] = false
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"{name} failed: {ex}");
+            var message = ex is RengaException
+                ? ex.Message
+                : $"{ex.GetType().Name}: {ex.Message}";
+            SendResult(id, new Dictionary<string, object?>
+            {
+                ["content"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["type"] = "text",
+                        ["text"] = message
+                    }
+                },
+                ["isError"] = true
+            });
+        }
+    }
+
+    private object Dispatch(string name, JsonElement args) => name switch
+    {
+        "renga_ping" => _service.Ping(),
+        "renga_new_project" => _service.NewProject(),
+        "renga_open_project" => _service.OpenProject(RequireString(args, "path")),
+        "renga_list_levels" => _service.ListLevels(),
+        "renga_create_level" => _service.CreateLevel(
+            RequireString(args, "name"),
+            RequireDouble(args, "elevation")),
+        "renga_create_axis" => _service.CreateAxis(
+            RequireString(args, "name"),
+            RequireDouble(args, "x1"),
+            RequireDouble(args, "y1"),
+            RequireDouble(args, "x2"),
+            RequireDouble(args, "y2")),
+        "renga_create_wall" => _service.CreateWall(
+            RequireDouble(args, "x1"),
+            RequireDouble(args, "y1"),
+            RequireDouble(args, "x2"),
+            RequireDouble(args, "y2"),
+            RequireInt(args, "levelId"),
+            RequireDouble(args, "height")),
+        "renga_create_column" => _service.CreateColumn(
+            RequireDouble(args, "x"),
+            RequireDouble(args, "y"),
+            RequireDouble(args, "height"),
+            OptionalInt(args, "levelId"),
+            OptionalDouble(args, "elevation")),
+        "renga_create_beam" => _service.CreateBeam(
+            RequireDouble(args, "x1"),
+            RequireDouble(args, "y1"),
+            RequireDouble(args, "z1"),
+            RequireDouble(args, "x2"),
+            RequireDouble(args, "y2"),
+            RequireDouble(args, "z2"),
+            OptionalInt(args, "levelId")),
+        "renga_create_floor" => _service.CreateFloor(
+            RequireInt(args, "levelId"),
+            RequireDouble(args, "thickness"),
+            OptionalPoints(args, "points"),
+            OptionalDouble(args, "x1"),
+            OptionalDouble(args, "y1"),
+            OptionalDouble(args, "x2"),
+            OptionalDouble(args, "y2")),
+        "renga_save_project" => _service.SaveProject(RequireString(args, "path")),
+        "renga_export_ifc" => _service.ExportIfc(RequireString(args, "path")),
+        _ => throw new RengaException($"Unknown tool: {name}")
+    };
+
+    private static bool TryGet(JsonElement args, string name, out JsonElement value)
+    {
+        value = default;
+        return args.ValueKind == JsonValueKind.Object &&
+               args.TryGetProperty(name, out value) &&
+               value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined;
+    }
+
+    private static string RequireString(JsonElement args, string name)
+    {
+        if (!TryGet(args, name, out var value) || value.ValueKind != JsonValueKind.String)
+        {
+            throw new RengaException($"Parameter '{name}' is required and must be a string.");
+        }
+
+        return value.GetString() ?? string.Empty;
+    }
+
+    private static double RequireDouble(JsonElement args, string name)
+    {
+        if (!TryGet(args, name, out var value) || value.ValueKind != JsonValueKind.Number ||
+            !value.TryGetDouble(out var result) || !double.IsFinite(result))
+        {
+            throw new RengaException($"Parameter '{name}' is required and must be a finite number.");
+        }
+
+        return result;
+    }
+
+    private static int RequireInt(JsonElement args, string name)
+    {
+        if (!TryGet(args, name, out var value))
+        {
+            throw new RengaException($"Parameter '{name}' is required and must be an integer.");
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
+        {
+            return number;
+        }
+
+        if (value.ValueKind == JsonValueKind.String &&
+            int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number))
+        {
+            return number;
+        }
+
+        throw new RengaException($"Parameter '{name}' is required and must be an integer.");
+    }
+
+    private static int? OptionalInt(JsonElement args, string name)
+    {
+        if (!TryGet(args, name, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
+        {
+            return number;
+        }
+
+        if (value.ValueKind == JsonValueKind.String &&
+            int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number))
+        {
+            return number;
+        }
+
+        throw new RengaException($"Parameter '{name}' must be an integer.");
+    }
+
+    private static double? OptionalDouble(JsonElement args, string name)
+    {
+        if (!TryGet(args, name, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number &&
+            value.TryGetDouble(out var number) &&
+            double.IsFinite(number))
+        {
+            return number;
+        }
+
+        throw new RengaException($"Parameter '{name}' must be a finite number.");
+    }
+
+    private static IReadOnlyList<(double X, double Y)>? OptionalPoints(JsonElement args, string name)
+    {
+        if (!TryGet(args, name, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw new RengaException($"Parameter '{name}' must be an array of points.");
+        }
+
+        var points = new List<(double X, double Y)>();
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object ||
+                !item.TryGetProperty("x", out var xElement) ||
+                !item.TryGetProperty("y", out var yElement) ||
+                xElement.ValueKind != JsonValueKind.Number ||
+                yElement.ValueKind != JsonValueKind.Number ||
+                !xElement.TryGetDouble(out var x) ||
+                !yElement.TryGetDouble(out var y) ||
+                !double.IsFinite(x) ||
+                !double.IsFinite(y))
+            {
+                throw new RengaException($"Each point in '{name}' must have finite numeric x and y.");
+            }
+
+            points.Add((x, y));
+        }
+
+        return points;
+    }
+
+    private void SendResult(JsonElement id, object result)
+    {
+        Send(new Dictionary<string, object?>
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id.Clone(),
+            ["result"] = result
+        });
+    }
+
+    private void SendError(JsonElement? id, int code, string message, object? data = null)
+    {
+        var error = new Dictionary<string, object?>
+        {
+            ["code"] = code,
+            ["message"] = message
+        };
+        if (data is not null)
+        {
+            error["data"] = data;
+        }
+
+        Send(new Dictionary<string, object?>
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id?.Clone(),
+            ["error"] = error
+        });
+    }
+
+    private void Send(object payload)
+    {
+        try
+        {
+            _output.WriteLine(JsonSerializer.Serialize(payload, ProtocolJson));
+        }
+        catch (Exception ex)
+        {
+            Log($"Failed to write a response: {ex}");
+        }
+    }
+
+    private string? ReadMessage()
+    {
+        var first = _input.ReadLine();
+        while (first is not null && first.Length == 0)
+        {
+            first = _input.ReadLine();
+        }
+
+        if (first is null)
+        {
+            return null;
+        }
+
+        if (!first.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+        {
+            return first;
+        }
+
+        if (!int.TryParse(
+                first["Content-Length:".Length..].Trim(),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var length) ||
+            length < 0 ||
+            length > 64 * 1024 * 1024)
+        {
+            throw new RengaException("Invalid Content-Length header.");
+        }
+
+        var header = _input.ReadLine();
+        while (!string.IsNullOrEmpty(header))
+        {
+            header = _input.ReadLine();
+        }
+
+        var buffer = new char[length];
+        var read = 0;
+        while (read < length)
+        {
+            var count = _input.Read(buffer, read, length - read);
+            if (count <= 0)
+            {
+                break;
+            }
+
+            read += count;
+        }
+
+        return new string(buffer, 0, read);
+    }
+
+    private static void Log(string message) =>
+        Console.Error.WriteLine($"[renga-mcp] {DateTime.Now:HH:mm:ss} {message}");
+}
