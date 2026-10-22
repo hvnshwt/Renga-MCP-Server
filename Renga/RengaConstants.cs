@@ -39,6 +39,29 @@ public static class RengaIds
     public static readonly Guid Section = new("4166fd59-64c0-45ee-ae3b-49fae1257ef1");
     public static readonly Guid Table = new("ed1f87a1-5c9c-4994-969d-6d3854571193");
     public static readonly Guid Schedule = new("5cbf0016-32bc-4630-99ea-c7cc94dda8e3");
+    public static readonly Guid Pipe = new("838cc9f6-e3d8-4132-af6f-c58df0f8d037");
+    public static readonly Guid Duct = new("06cc88ee-9a67-4626-9c34-dde03c331a74");
+    public static readonly Guid ElectricalCircuitLine = new("83de45e6-4793-49ec-8b9e-65a2438f36de");
+    public static readonly Guid PipeFitting = new("d31dc2e3-808e-4987-8481-7f86665a07fc");
+    public static readonly Guid PipeAccessory = new("41e2788a-49ed-487f-9ae1-55b6e09ae6e5");
+    public static readonly Guid DuctFitting = new("77ffca60-b20e-49f0-b42f-4fdc9b1c825b");
+    public static readonly Guid DuctAccessory = new("47d0d93f-3c7b-4269-bf8a-de246e1724d0");
+    public static readonly Guid Route = new("8b323bee-3882-4744-8838-24f45df714a9");
+    public static readonly Guid RoutePoint = new("ce93e320-7167-4cd1-92a8-5e42d546066b");
+    public static readonly Guid Equipment = new("5d2f3734-5a49-4504-90b1-0676f0f25da7");
+    public static readonly Guid MechanicalEquipment = new("de4420ce-02b6-4b12-9cd7-9322118be8fe");
+    public static readonly Guid PlumbingFixture = new("b8c7155a-b462-4ff5-bc41-c9c17a9f48fa");
+    public static readonly Guid LightingFixture = new("793d3f7c-905d-4d85-a351-b152241dd2e7");
+    public static readonly Guid WiringAccessory = new("b00d5c25-92a8-4409-a3b7-7c37ed792c06");
+    public static readonly Guid ElectricDistributionBoard = new("96da9155-43c1-42b8-bba2-b4f61fa43acc");
+    public static readonly Guid PipeStyle = new("9d6dffb9-4828-40d8-8529-bf5cd2b58c4e");
+    public static readonly Guid DuctStyle = new("a999f05a-d730-42e7-bfc8-e4433ebace78");
+    public static readonly Guid ElectricalCircuitLineStyle = new("33fb4b37-83f9-422a-81d4-640a152c619e");
+    public static readonly Guid PipeFittingStyle = new("b1359bdc-f7ff-43a4-bca0-8d09bc974537");
+    public static readonly Guid DuctFittingStyle = new("6c6821a0-ebb9-445b-84a2-ed9eb0938e4f");
+    public static readonly Guid PipeAccessoryStyle = new("a31cf7ca-f17b-422a-886a-7a8c362cd49a");
+    public static readonly Guid DuctAccessoryStyle = new("6c671391-bfea-4e92-9753-8855c05640a0");
+    public static readonly Guid SystemStyle = new("e65c5fad-d4d3-4f43-bd01-b28d0eb95571");
 }
 
 public static class RengaParams

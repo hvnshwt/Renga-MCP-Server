@@ -94,6 +94,21 @@ public sealed class RengaConnector : IDisposable
                 : $"{operation} failed with code {result}. Renga: {details}");
     }
 
+    public void ClearLastError()
+    {
+        try
+        {
+            if (_application is not null)
+            {
+                _application.LastError = string.Empty;
+            }
+        }
+        catch
+        {
+            // ignored
+        }
+    }
+
     private static IApplication ConnectCore()
     {
         object? instance = null;

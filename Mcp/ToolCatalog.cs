@@ -855,6 +855,224 @@ public static class ToolCatalog
             }
             """),
         new ToolSpec(
+            "renga_list_mep_categories",
+            "List MEP categories",
+            "Lists pipe, duct, and electrical system categories and the style categories used by MEP equipment, fittings, and accessories.",
+            """
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_route_point",
+            "Create a route point",
+            "Creates a route point (точка трассировки) on a level. Route points are anchors for pipe, duct, and electrical routes. Coordinates are in meters.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "x": { "type": "number", "description": "Point X in meters." },
+                "y": { "type": "number", "description": "Point Y in meters." },
+                "z": { "type": "number", "description": "Absolute point Z in meters." },
+                "name": { "type": "string", "description": "Optional route point name." }
+              },
+              "required": ["levelId", "x", "y", "z"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_pipe",
+            "Create a pipe route",
+            "Creates a pipe route between two 3D points. The server creates two route points and connects them through Renga's engineering object connector. Coordinates are in meters.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "x1": { "type": "number", "description": "Start X in meters." },
+                "y1": { "type": "number", "description": "Start Y in meters." },
+                "z1": { "type": "number", "description": "Start Z in meters." },
+                "x2": { "type": "number", "description": "End X in meters." },
+                "y2": { "type": "number", "description": "End Y in meters." },
+                "z2": { "type": "number", "description": "End Z in meters." },
+                "styleId": { "type": "integer", "description": "Optional pipe style ID. Uses the first pipe style when omitted." },
+                "insulationId": { "type": "integer", "description": "Optional insulation layered material ID. Default 0 (none)." },
+                "fittingStyleIds": {
+                  "type": "array",
+                  "description": "Optional compatible pipe fitting style IDs.",
+                  "items": { "type": "integer" }
+                },
+                "systemCategory": { "type": "string", "description": "Optional system category name or value. Default domestic_cold_water." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["levelId", "x1", "y1", "z1", "x2", "y2", "z2"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_duct",
+            "Create a duct route",
+            "Creates a duct route between two 3D points. The server creates two route points and connects them through Renga's engineering object connector. Coordinates are in meters.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "x1": { "type": "number", "description": "Start X in meters." },
+                "y1": { "type": "number", "description": "Start Y in meters." },
+                "z1": { "type": "number", "description": "Start Z in meters." },
+                "x2": { "type": "number", "description": "End X in meters." },
+                "y2": { "type": "number", "description": "End Y in meters." },
+                "z2": { "type": "number", "description": "End Z in meters." },
+                "styleId": { "type": "integer", "description": "Optional duct style ID. Uses the first duct style when omitted." },
+                "insulationId": { "type": "integer", "description": "Optional insulation layered material ID. Default 0 (none)." },
+                "fittingStyleIds": {
+                  "type": "array",
+                  "description": "Optional compatible duct fitting style IDs.",
+                  "items": { "type": "integer" }
+                },
+                "systemCategory": { "type": "string", "description": "Optional system category name or value. Default ventilation." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["levelId", "x1", "y1", "z1", "x2", "y2", "z2"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_electrical_line",
+            "Create an electrical circuit line",
+            "Creates an electrical circuit line between two 3D points. The server creates two route points and connects them through Renga's engineering object connector. Coordinates are in meters.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "x1": { "type": "number", "description": "Start X in meters." },
+                "y1": { "type": "number", "description": "Start Y in meters." },
+                "z1": { "type": "number", "description": "Start Z in meters." },
+                "x2": { "type": "number", "description": "End X in meters." },
+                "y2": { "type": "number", "description": "End Y in meters." },
+                "z2": { "type": "number", "description": "End Z in meters." },
+                "styleId": { "type": "integer", "description": "Optional electrical circuit line style ID. Uses the first style when omitted." },
+                "systemCategory": { "type": "string", "description": "Optional system category name or value. Default lighting_circuit." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["levelId", "x1", "y1", "z1", "x2", "y2", "z2"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_connect_mep",
+            "Connect MEP objects",
+            "Connects two MEP objects with ports (equipment, route points, or a route) using Renga's engineering object connector. Use port index -1 for a route endpoint.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "description": "Connection kind: pipe, duct, or electrical." },
+                "sourceId": { "type": "integer", "description": "Source object ID." },
+                "sourcePort": { "type": "integer", "description": "Zero-based source port index." },
+                "targetId": { "type": "integer", "description": "Target object ID." },
+                "targetPort": { "type": "integer", "description": "Zero-based target port index, or -1 for a route endpoint." },
+                "styleId": { "type": "integer", "description": "Optional pipe, duct, or electrical line style ID." },
+                "insulationId": { "type": "integer", "description": "Optional insulation layered material ID. Default 0." },
+                "fittingStyleIds": {
+                  "type": "array",
+                  "description": "Optional fitting style IDs for pipe or duct connections.",
+                  "items": { "type": "integer" }
+                },
+                "systemCategory": { "type": "string", "description": "Optional system category name or value." },
+                "mark": { "type": "string", "description": "Optional mark for the created MEP object." }
+              },
+              "required": ["kind", "sourceId", "sourcePort", "targetId", "targetPort"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_mep_equipment",
+            "Create MEP equipment",
+            "Creates MEP equipment or a fixture. Equipment, mechanical equipment, and plumbing fixtures are hosted by a level; lighting fixtures, wiring accessories, and distribution boards require hostId (wall, column, beam, or floor). StyleId is required by Renga for these objects.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "description": "equipment, mechanical_equipment, plumbing_fixture, lighting_fixture, wiring_accessory, or electric_distribution_board." },
+                "levelId": { "type": "integer", "description": "Local ID of the host level. Required for level-hosted kinds." },
+                "hostId": { "type": "integer", "description": "Host object ID (wall, column, beam, or floor) for hosted fixtures." },
+                "x": { "type": "number", "description": "X in meters." },
+                "y": { "type": "number", "description": "Y in meters." },
+                "z": { "type": "number", "description": "Z in meters. Absolute for hosted fixtures, absolute elevation for level-hosted objects." },
+                "styleId": { "type": "integer", "description": "Optional style ID. Uses the first style of the kind when omitted." },
+                "rotation": { "type": "number", "description": "Optional rotation angle in degrees." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["kind", "x", "y", "z"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_place_mep_component",
+            "Place a fitting or accessory",
+            "Places a pipe/duct fitting or accessory on an existing route. Renga validates style compatibility; for example, elbows and tees may fail on a straight route.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "description": "pipe_fitting, pipe_accessory, duct_fitting, or duct_accessory." },
+                "routeId": { "type": "integer", "description": "Local ID of the host route." },
+                "x": { "type": "number", "description": "Projection point X in meters." },
+                "y": { "type": "number", "description": "Projection point Y in meters." },
+                "z": { "type": "number", "description": "Projection point Z in meters." },
+                "styleId": { "type": "integer", "description": "Optional component style ID. Uses the first style of the kind when omitted." },
+                "angle": { "type": "number", "description": "Optional rotation angle in degrees." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["kind", "routeId", "x", "y", "z"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_list_mep_routes",
+            "List MEP routes",
+            "Lists routes with source and target ports, system style, contour length, segments, joints, and objects placed on the route.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "limit": { "type": "integer", "description": "Optional maximum number of routes. Default 500." }
+              },
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_mep_style",
+            "Create an MEP style",
+            "Creates an MEP style. Pipe, duct, and electrical line styles support dimensions; fitting and accessory styles require categoryId from renga_list_mep_categories.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "description": "pipe, duct, electrical_circuit_line, pipe_fitting, pipe_accessory, duct_fitting, or duct_accessory." },
+                "name": { "type": "string", "description": "Style name." },
+                "materialId": { "type": "integer", "description": "Optional material ID." },
+                "categoryId": { "type": "integer", "description": "Category ID for fitting and accessory styles." },
+                "diameter": { "type": "number", "description": "Optional pipe outside diameter in meters." },
+                "insideDiameter": { "type": "number", "description": "Optional pipe inside diameter in meters." },
+                "wallThickness": { "type": "number", "description": "Optional pipe or duct wall thickness in meters." },
+                "width": { "type": "number", "description": "Optional rectangular duct width in meters." },
+                "height": { "type": "number", "description": "Optional rectangular duct height in meters." },
+                "profile": { "type": "string", "description": "Optional duct profile: circle or rectangle." },
+                "conductorNumber": { "type": "integer", "description": "Optional number of conductors for an electrical circuit line style." },
+                "conductorStyleId": { "type": "integer", "description": "Optional conductor style ID for an electrical circuit line style." }
+              },
+              "required": ["kind", "name"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
             "renga_save_project",
             "Save the Renga project",
             "Saves the current project to the specified .rnp path. The .rnp extension is appended if missing.",

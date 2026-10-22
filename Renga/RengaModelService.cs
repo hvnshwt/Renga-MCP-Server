@@ -2079,6 +2079,1180 @@ public sealed class RengaModelService
         };
     }
 
+    public object ListMepCategories()
+    {
+        var project = _connector.RequireProject();
+        return new Dictionary<string, object?>
+        {
+            ["systemCategories"] = MepSystemCategories
+                .Select(item => new Dictionary<string, object?>
+                {
+                    ["name"] = item.Name,
+                    ["value"] = (int)item.Category,
+                    ["kind"] = item.Kind
+                })
+                .ToArray(),
+            ["styleCategories"] = new Dictionary<string, object?>
+            {
+                ["equipment"] = DescribeEntities(project.EquipmentCategories),
+                ["mechanical_equipment"] = DescribeEntities(project.MechanicalEquipmentCategories),
+                ["plumbing_fixture"] = DescribeEntities(project.PlumbingFixtureCategories),
+                ["lighting_fixture"] = DescribeEntities(project.LightingFixtureCategories),
+                ["wiring_accessory"] = DescribeEntities(project.WiringAccessoryCategories),
+                ["electric_distribution_board"] = DescribeEntities(project.ElectricDistributionBoardCategories),
+                ["pipe_fitting"] = DescribeEntities(project.PipeFittingCategories),
+                ["pipe_accessory"] = DescribeEntities(project.PipeAccessoryCategories),
+                ["duct_fitting"] = DescribeEntities(project.DuctFittingCategories),
+                ["duct_accessory"] = DescribeEntities(project.DuctAccessoryCategories)
+            }
+        };
+    }
+
+    public object CreateRoutePoint(int levelId, double x, double y, double z, string? name)
+    {
+        var px = Units.ToMillimeters(RequireFinite(x, "x"));
+        var py = Units.ToMillimeters(RequireFinite(y, "y"));
+        var pz = Units.ToMillimeters(RequireFinite(z, "z"));
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var level = ResolveLevel(model, levelId, null);
+        var localZ = pz - level.ElevationMm;
+        var pointName = string.IsNullOrWhiteSpace(name) ? "Route point" : name.Trim();
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var point = CreateRoutePointObject(model, level.Id, px, py, localZ, pointName);
+            op.Apply();
+            applied = true;
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = point.Id,
+                ["uniqueId"] = point.UniqueIdS,
+                ["type"] = point.ObjectTypeS,
+                ["name"] = pointName,
+                ["levelId"] = level.Id,
+                ["levelName"] = level.Name,
+                ["x"] = x,
+                ["y"] = y,
+                ["z"] = z,
+                ["ports"] = GetPortCount(point)
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object CreatePipe(
+        int levelId,
+        double x1,
+        double y1,
+        double z1,
+        double x2,
+        double y2,
+        double z2,
+        int? styleId,
+        int? insulationId,
+        IReadOnlyList<int>? fittingStyleIds,
+        string? systemCategory,
+        string? mark) => CreateMepLine(
+            "pipe", levelId, x1, y1, z1, x2, y2, z2, styleId, insulationId, fittingStyleIds, systemCategory, mark);
+
+    public object CreateDuct(
+        int levelId,
+        double x1,
+        double y1,
+        double z1,
+        double x2,
+        double y2,
+        double z2,
+        int? styleId,
+        int? insulationId,
+        IReadOnlyList<int>? fittingStyleIds,
+        string? systemCategory,
+        string? mark) => CreateMepLine(
+            "duct", levelId, x1, y1, z1, x2, y2, z2, styleId, insulationId, fittingStyleIds, systemCategory, mark);
+
+    public object CreateElectricalLine(
+        int levelId,
+        double x1,
+        double y1,
+        double z1,
+        double x2,
+        double y2,
+        double z2,
+        int? styleId,
+        string? systemCategory,
+        string? mark) => CreateMepLine(
+            "electrical", levelId, x1, y1, z1, x2, y2, z2, styleId, null, null, systemCategory, mark);
+
+    public object ConnectMep(
+        string kind,
+        int sourceId,
+        int sourcePort,
+        int targetId,
+        int targetPort,
+        int? styleId,
+        int? insulationId,
+        IReadOnlyList<int>? fittingStyleIds,
+        string? systemCategory,
+        string? mark)
+    {
+        var info = ResolveMepLineKind(kind);
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var style = ResolveMepStyle(project, info.Styles(project), styleId, info.Kind);
+        var category = ResolveMepSystemCategory(systemCategory, info.Kind);
+        var insulation = insulationId ?? 0;
+        var fittings = fittingStyleIds ?? Array.Empty<int>();
+
+        if (sourcePort < -1 || targetPort < -1)
+        {
+            throw new RengaException("Port indices must be zero-based; use -1 for a route endpoint.");
+        }
+
+        var (route, line) = ConnectMepCore(
+            project,
+            model,
+            info,
+            sourceId,
+            sourcePort,
+            targetId,
+            targetPort,
+            style.Id,
+            insulation,
+            fittings,
+            category);
+
+        ApplyMark(project, line, mark);
+        var routeInfo = DescribeRoute(route, project);
+
+        return new Dictionary<string, object?>
+        {
+            ["created"] = true,
+            ["kind"] = info.Kind,
+            ["routeId"] = route.Id,
+            ["objectId"] = line.Id,
+            ["objectUniqueId"] = line.UniqueIdS,
+            ["objectName"] = line.Name,
+            ["styleId"] = style.Id,
+            ["styleName"] = style.Name,
+            ["systemCategory"] = category.ToString(),
+            ["systemCategoryValue"] = (int)category,
+            ["sourceId"] = sourceId,
+            ["sourcePort"] = sourcePort,
+            ["targetId"] = targetId,
+            ["targetPort"] = targetPort,
+            ["length"] = routeInfo.Length,
+            ["segments"] = routeInfo.Segments,
+            ["start"] = routeInfo.Start,
+            ["end"] = routeInfo.End
+        };
+    }
+
+    public object CreateMepEquipment(
+        string kind,
+        int? levelId,
+        int? hostId,
+        double x,
+        double y,
+        double z,
+        int? styleId,
+        double? rotationDegrees,
+        string? mark)
+    {
+        var info = ResolveMepEquipmentKind(kind);
+        var px = Units.ToMillimeters(RequireFinite(x, "x"));
+        var py = Units.ToMillimeters(RequireFinite(y, "y"));
+        var pz = Units.ToMillimeters(RequireFinite(z, "z"));
+        var rotation = RequireFinite(rotationDegrees ?? 0, "rotation");
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var style = ResolveMepStyle(project, info.Styles(project), styleId, info.Kind);
+
+        IModelObject host;
+        IModelObject levelObject;
+        if (info.RequiresHost)
+        {
+            var resolvedHostId = hostId
+                ?? throw new RengaException($"{info.Kind} requires hostId (wall, column, beam, or floor).");
+            host = FindObject(model, resolvedHostId)
+                ?? throw new RengaException($"Host object with ID {resolvedHostId} was not found.");
+            var hostLevelId = (host as ILevelObject)?.LevelId
+                ?? throw new RengaException($"Host {resolvedHostId} does not expose ILevelObject.");
+            levelObject = FindLevel(model, hostLevelId)
+                ?? throw new RengaException($"Level with ID {hostLevelId} was not found.");
+        }
+        else
+        {
+            var resolvedLevelId = levelId
+                ?? throw new RengaException($"{info.Kind} requires levelId.");
+            levelObject = FindLevel(model, resolvedLevelId)
+                ?? throw new RengaException($"Level with ID {resolvedLevelId} was not found.");
+            host = levelObject;
+        }
+
+        var level = (ILevel)levelObject;
+        var localZ = info.RequiresHost ? pz : pz - level.Elevation;
+        var angleRadians = rotation * Math.PI / 180.0;
+        var axisX = info.RequiresHost
+            ? new Vector3D { X = Math.Cos(angleRadians), Y = Math.Sin(angleRadians), Z = 0 }
+            : new Vector3D { X = 1, Y = 0, Z = 0 };
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = model.CreateNewEntityArgs();
+            args.TypeId = info.TypeId;
+            args.HostObjectId = host.Id;
+            args.Placement3D = new Placement3D
+            {
+                Origin = new Point3D { X = px, Y = py, Z = localZ },
+                xAxis = axisX,
+                zAxis = new Vector3D { X = 0, Y = 0, Z = 1 }
+            };
+            args.StyleId = style.Id;
+
+            var obj = model.CreateObject(args)
+                ?? throw new RengaException($"Renga did not create {info.Kind}. " + _connector.LastError);
+
+            if (!string.IsNullOrWhiteSpace(mark))
+            {
+                SetStringParameterByName(obj, "Mark", mark.Trim());
+            }
+
+            op.Apply();
+            applied = true;
+
+            if (!info.RequiresHost && Math.Abs(rotation) > 1e-9)
+            {
+                ApplyLateParameters(
+                    project,
+                    obj,
+                    Array.Empty<(string, int)>(),
+                    new[] { ("PrecessionAngle", rotation) },
+                    null);
+            }
+
+            var levelObjectInfo = obj as ILevelObject;
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["kind"] = info.Kind,
+                ["id"] = obj.Id,
+                ["uniqueId"] = obj.UniqueIdS,
+                ["type"] = obj.ObjectTypeS,
+                ["name"] = obj.Name,
+                ["levelId"] = levelObjectInfo?.LevelId ?? levelObject.Id,
+                ["levelName"] = level.LevelName,
+                ["hostId"] = host.Id,
+                ["x"] = x,
+                ["y"] = y,
+                ["z"] = z,
+                ["rotation"] = rotation,
+                ["styleId"] = style.Id,
+                ["styleName"] = style.Name,
+                ["category"] = GetStringParameter(obj.GetParameters(), "Category"),
+                ["ports"] = GetPortCount(obj)
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object PlaceMepComponent(
+        string kind,
+        int routeId,
+        double x,
+        double y,
+        double z,
+        int? styleId,
+        double? angleDegrees,
+        string? mark)
+    {
+        var info = ResolveMepComponentKind(kind);
+        var px = Units.ToMillimeters(RequireFinite(x, "x"));
+        var py = Units.ToMillimeters(RequireFinite(y, "y"));
+        var pz = Units.ToMillimeters(RequireFinite(z, "z"));
+        var angle = RequireFinite(angleDegrees ?? 0, "angle");
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var route = FindObject(model, routeId)
+            ?? throw new RengaException($"Route with ID {routeId} was not found.");
+        if (route.ObjectType != RengaIds.Route)
+        {
+            throw new RengaException($"Object {routeId} is not a route.");
+        }
+
+        var style = ResolveMepStyle(project, info.Styles(project), styleId, info.Kind);
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = model.CreateNewEntityArgs();
+            args.TypeId = info.TypeId;
+            args.HostObjectId = routeId;
+            args.StyleId = style.Id;
+            args.Placement3D = new Placement3D
+            {
+                Origin = new Point3D { X = px, Y = py, Z = pz },
+                xAxis = new Vector3D { X = 1, Y = 0, Z = 0 },
+                zAxis = new Vector3D { X = 0, Y = 0, Z = 1 }
+            };
+
+            var obj = model.CreateObject(args)
+                ?? throw new RengaException($"Renga did not create {info.Kind}. " + _connector.LastError);
+
+            if (!string.IsNullOrWhiteSpace(mark))
+            {
+                SetStringParameterByName(obj, "Mark", mark.Trim());
+            }
+
+            op.Apply();
+            applied = true;
+
+            if (Math.Abs(angle) > 1e-9)
+            {
+                ApplyLateParameters(
+                    project,
+                    obj,
+                    Array.Empty<(string, int)>(),
+                    new[] { (info.AngleParameter, angle) },
+                    null);
+            }
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["kind"] = info.Kind,
+                ["id"] = obj.Id,
+                ["uniqueId"] = obj.UniqueIdS,
+                ["type"] = obj.ObjectTypeS,
+                ["name"] = obj.Name,
+                ["routeId"] = routeId,
+                ["x"] = x,
+                ["y"] = y,
+                ["z"] = z,
+                ["angle"] = angle,
+                ["styleId"] = style.Id,
+                ["styleName"] = style.Name,
+                ["category"] = GetStringParameter(obj.GetParameters(), "Category")
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object ListMepRoutes(int? limit)
+    {
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var max = Math.Clamp(limit ?? 500, 1, 5000);
+        var items = new List<Dictionary<string, object?>>();
+        var objects = model.GetObjects();
+        for (var i = 0; i < objects.Count && items.Count < max; i++)
+        {
+            var obj = objects.GetByIndex(i);
+            if (obj.ObjectType != RengaIds.Route)
+            {
+                continue;
+            }
+
+            var info = DescribeRoute(obj, project);
+            items.Add(new Dictionary<string, object?>
+            {
+                ["id"] = obj.Id,
+                ["uniqueId"] = obj.UniqueIdS,
+                ["name"] = obj.Name,
+                ["styleId"] = info.StyleId,
+                ["styleName"] = info.StyleName,
+                ["sourceId"] = info.SourceId,
+                ["sourcePort"] = info.SourcePort,
+                ["targetId"] = info.TargetId,
+                ["targetPort"] = info.TargetPort,
+                ["segments"] = info.Segments,
+                ["joints"] = info.Joints,
+                ["length"] = info.Length,
+                ["start"] = info.Start,
+                ["end"] = info.End,
+                ["objectOnRouteIds"] = info.ObjectOnRouteIds
+            });
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["count"] = items.Count,
+            ["limit"] = max,
+            ["routes"] = items.ToArray()
+        };
+    }
+
+    public object CreateMepStyle(
+        string kind,
+        string name,
+        int? materialId,
+        int? categoryId,
+        double? diameterMeters,
+        double? insideDiameterMeters,
+        double? wallThicknessMeters,
+        double? widthMeters,
+        double? heightMeters,
+        string? profile,
+        int? conductorNumber,
+        int? conductorStyleId)
+    {
+        name = RequireName(name, "name");
+        var info = ResolveMepStyleKind(kind);
+        var project = _connector.RequireProject();
+        var collection = info.Styles(project);
+
+        int? resolvedCategoryId = null;
+        if (info.Categories is not null)
+        {
+            var requiredCategoryId = categoryId
+                ?? throw new RengaException($"{info.Kind} style requires categoryId. Use renga_list_mep_categories.");
+            var category = info.Categories(project).GetById(requiredCategoryId)
+                ?? throw new RengaException($"Category {requiredCategoryId} was not found for {info.Kind}.");
+            resolvedCategoryId = category.Id;
+        }
+
+        var diameterMm = diameterMeters is double diameter
+            ? Units.ToMillimeters(RequireFinite(diameter, "diameter"))
+            : (double?)null;
+        var insideDiameterMm = insideDiameterMeters is double inside
+            ? Units.ToMillimeters(RequireFinite(inside, "insideDiameter"))
+            : (double?)null;
+        var wallThicknessMm = wallThicknessMeters is double wall
+            ? Units.ToMillimeters(RequireFinite(wall, "wallThickness"))
+            : (double?)null;
+        var widthMm = widthMeters is double widthValue
+            ? Units.ToMillimeters(RequireFinite(widthValue, "width"))
+            : (double?)null;
+        var heightMm = heightMeters is double heightValue
+            ? Units.ToMillimeters(RequireFinite(heightValue, "height"))
+            : (double?)null;
+        var profileValue = string.IsNullOrWhiteSpace(profile) ? (int?)null : ParseDuctProfile(profile);
+        if (profileValue is null && (widthMm is not null || heightMm is not null))
+        {
+            profileValue = 1;
+        }
+
+        var op = StartOperation(project);
+        var applied = false;
+        IEntity entity;
+        try
+        {
+            var args = collection.CreateNewEntityArgs();
+            args.TypeId = info.TypeId;
+            if (resolvedCategoryId is int category) args.CategoryId = category;
+            entity = collection.Create(args)
+                ?? throw new RengaException($"Renga did not create the {info.Kind} style. " + _connector.LastError);
+
+            var container = GetEntityContainer(entity);
+            SetContainerString(container, RengaParams.EntityName, name);
+            if (materialId is int material)
+            {
+                SetContainerInt(container, RengaParams.MaterialId, material);
+            }
+
+            if (info.Kind == "pipe")
+            {
+                if (diameterMm is double outside) SetContainerDoubleByName(container, "PipeOutsideDiameter", outside);
+                if (wallThicknessMm is double pipeWall) SetContainerDoubleByName(container, "PipeWallThickness", pipeWall);
+                if (insideDiameterMm is double pipeInside) SetContainerDoubleByName(container, "PipeInsideDiameter", pipeInside);
+            }
+            else if (info.Kind == "duct")
+            {
+                if (wallThicknessMm is double ductWall) SetContainerDoubleByName(container, "DuctWallThickness", ductWall);
+            }
+
+            op.Apply();
+            applied = true;
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+
+        var lateInts = new List<(string, int)>();
+        var lateDoubles = new List<(string, double)>();
+        if (info.Kind == "electrical_circuit_line")
+        {
+            if (conductorNumber is int number) lateInts.Add(("ElectricalConductorNumber", number));
+            if (conductorStyleId is int conductorStyle) lateInts.Add(("ConductorStyleId", conductorStyle));
+        }
+        else if (info.Kind == "duct")
+        {
+            if (profileValue is int ductProfile) lateInts.Add(("DuctProfile", ductProfile));
+            if (widthMm is double ductWidth) lateDoubles.Add(("DuctWidth", ductWidth));
+            if (heightMm is double ductHeight) lateDoubles.Add(("DuctHeight", ductHeight));
+        }
+
+        var containerAfter = GetEntityContainer(entity);
+        ApplyLateContainerParameters(
+            project,
+            containerAfter,
+            $"Style {entity.Id}",
+            lateInts,
+            lateDoubles,
+            null);
+
+        return new Dictionary<string, object?>
+        {
+            ["created"] = true,
+            ["kind"] = info.Kind,
+            ["id"] = entity.Id,
+            ["uniqueId"] = entity.UniqueIdS,
+            ["name"] = name,
+            ["typeId"] = entity.TypeIdS,
+            ["categoryId"] = resolvedCategoryId,
+            ["materialId"] = materialId
+        };
+    }
+
+    private object CreateMepLine(
+        string kind,
+        int levelId,
+        double x1,
+        double y1,
+        double z1,
+        double x2,
+        double y2,
+        double z2,
+        int? styleId,
+        int? insulationId,
+        IReadOnlyList<int>? fittingStyleIds,
+        string? systemCategory,
+        string? mark)
+    {
+        var sx = Units.ToMillimeters(RequireFinite(x1, "x1"));
+        var sy = Units.ToMillimeters(RequireFinite(y1, "y1"));
+        var sz = Units.ToMillimeters(RequireFinite(z1, "z1"));
+        var ex = Units.ToMillimeters(RequireFinite(x2, "x2"));
+        var ey = Units.ToMillimeters(RequireFinite(y2, "y2"));
+        var ez = Units.ToMillimeters(RequireFinite(z2, "z2"));
+        if (Math.Abs(sx - ex) < 1e-6 && Math.Abs(sy - ey) < 1e-6 && Math.Abs(sz - ez) < 1e-6)
+        {
+            throw new RengaException("MEP line start and end points must be different.");
+        }
+
+        var info = ResolveMepLineKind(kind);
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var level = ResolveLevel(model, levelId, null);
+        var style = ResolveMepStyle(project, info.Styles(project), styleId, info.Kind);
+        var category = ResolveMepSystemCategory(systemCategory, info.Kind);
+        var insulation = insulationId ?? 0;
+        var fittings = fittingStyleIds ?? Array.Empty<int>();
+
+        var startLocalZ = sz - level.ElevationMm;
+        var endLocalZ = ez - level.ElevationMm;
+
+        int startId;
+        int endId;
+        var pointsOp = StartOperation(project);
+        try
+        {
+            var start = CreateRoutePointObject(model, level.Id, sx, sy, startLocalZ, $"{info.DisplayName} start");
+            var end = CreateRoutePointObject(model, level.Id, ex, ey, endLocalZ, $"{info.DisplayName} end");
+            pointsOp.Apply();
+            startId = start.Id;
+            endId = end.Id;
+        }
+        catch
+        {
+            TryRollback(pointsOp);
+            throw;
+        }
+
+        try
+        {
+            var (route, line) = ConnectMepCore(
+                project,
+                model,
+                info,
+                startId,
+                0,
+                endId,
+                0,
+                style.Id,
+                insulation,
+                fittings,
+                category);
+
+            ApplyMark(project, line, mark);
+            var routeInfo = DescribeRoute(route, project);
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["kind"] = info.Kind,
+                ["routeId"] = route.Id,
+                ["objectId"] = line.Id,
+                ["objectUniqueId"] = line.UniqueIdS,
+                ["objectName"] = line.Name,
+                ["routePointIds"] = new[] { startId, endId },
+                ["styleId"] = style.Id,
+                ["styleName"] = style.Name,
+                ["systemCategory"] = category.ToString(),
+                ["systemCategoryValue"] = (int)category,
+                ["length"] = routeInfo.Length,
+                ["segments"] = routeInfo.Segments,
+                ["start"] = new { x = x1, y = y1, z = z1 },
+                ["end"] = new { x = x2, y = y2, z = z2 }
+            };
+        }
+        catch
+        {
+            TryDeleteObjects(project, model, startId, endId);
+            throw;
+        }
+    }
+
+    private (IModelObject Route, IModelObject Line) ConnectMepCore(
+        IProject project,
+        IModel model,
+        MepLineKind info,
+        int sourceId,
+        int sourcePort,
+        int targetId,
+        int targetPort,
+        int styleId,
+        int insulationId,
+        IReadOnlyList<int> fittingStyleIds,
+        SystemCategory category)
+    {
+        var before = SnapshotObjectIds(model);
+        var connector = project.EngineeringObjectConnector;
+        _connector.ClearLastError();
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            switch (info.Kind)
+            {
+                case "pipe":
+                {
+                    var parameters = connector.CreatePipeSystemConnectionParameters();
+                    parameters.AddPipeStyleMagistral(styleId, insulationId);
+                    parameters.AddPipeStyleBranch(styleId, insulationId);
+                    foreach (var fitting in fittingStyleIds)
+                    {
+                        parameters.AddPipeFittingStyle(fitting);
+                    }
+
+                    connector.CreatePipeSystemConnection(
+                        parameters, sourceId, sourcePort, targetId, targetPort, category);
+                    break;
+                }
+                case "duct":
+                {
+                    var parameters = connector.CreateDuctSystemConnectionParameters();
+                    parameters.AddDuctStyleMagistral(styleId, insulationId);
+                    parameters.AddDuctStyleBranch(styleId, insulationId);
+                    foreach (var fitting in fittingStyleIds)
+                    {
+                        parameters.AddDuctFittingStyle(fitting);
+                    }
+
+                    connector.CreateDuctSystemConnection(
+                        parameters, sourceId, sourcePort, targetId, targetPort, category);
+                    break;
+                }
+                case "electrical":
+                {
+                    var parameters = connector.CreateElectricalSystemConnectionParameters();
+                    parameters.AddElectricalCircuitLineStyle(styleId);
+                    connector.CreateElectricalSystemConnection(
+                        parameters, sourceId, sourcePort, targetId, targetPort, category);
+                    break;
+                }
+                default:
+                    throw new RengaException($"Unsupported MEP kind '{info.Kind}'.");
+            }
+
+            op.Apply();
+            applied = true;
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+
+        IModelObject? route = null;
+        IModelObject? line = null;
+        var objects = model.GetObjects();
+        for (var i = 0; i < objects.Count; i++)
+        {
+            var obj = objects.GetByIndex(i);
+            if (before.Contains(obj.Id))
+            {
+                continue;
+            }
+
+            if (obj.ObjectType == RengaIds.Route && route is null)
+            {
+                route = obj;
+            }
+            else if (obj.ObjectType == info.TypeId && line is null)
+            {
+                line = obj;
+            }
+        }
+
+        if (route is null || line is null)
+        {
+            throw new RengaException(
+                $"Renga did not create a {info.Kind} route. Check style compatibility, system category, " +
+                $"and port indices. {_connector.LastError}".Trim());
+        }
+
+        return (route, line);
+    }
+
+    private static IModelObject CreateRoutePointObject(
+        IModel model,
+        int levelId,
+        double xMm,
+        double yMm,
+        double zLocalMm,
+        string name)
+    {
+        var args = model.CreateNewEntityArgs();
+        args.TypeId = RengaIds.RoutePoint;
+        args.HostObjectId = levelId;
+        args.Placement3D = new Placement3D
+        {
+            Origin = new Point3D { X = xMm, Y = yMm, Z = zLocalMm },
+            xAxis = new Vector3D { X = 1, Y = 0, Z = 0 },
+            zAxis = new Vector3D { X = 0, Y = 0, Z = 1 }
+        };
+
+        var point = model.CreateObject(args)
+            ?? throw new RengaException("Renga did not create the route point.");
+        SetStringParameterByName(point, "RoutePointName", name);
+        return point;
+    }
+
+    private void ApplyMark(IProject project, IModelObject obj, string? mark)
+    {
+        if (string.IsNullOrWhiteSpace(mark))
+        {
+            return;
+        }
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            SetStringParameterByName(obj, "Mark", mark.Trim());
+            op.Apply();
+            applied = true;
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw new RengaException($"Object {obj.Id} was created, but Mark could not be set.", new Exception());
+        }
+    }
+
+    private void TryDeleteObjects(IProject project, IModel model, params int[] ids)
+    {
+        if (ids.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var op = StartOperation(project);
+            foreach (var id in ids)
+            {
+                try
+                {
+                    model.DeleteObjectById(id);
+                }
+                catch
+                {
+                    // ignored
+                }
+            }
+
+            op.Apply();
+        }
+        catch
+        {
+            // ignored
+        }
+    }
+
+    private static HashSet<int> SnapshotObjectIds(IModel model)
+    {
+        var result = new HashSet<int>();
+        var objects = model.GetObjects();
+        for (var i = 0; i < objects.Count; i++)
+        {
+            result.Add(objects.GetByIndex(i).Id);
+        }
+
+        return result;
+    }
+
+    private static int GetPortCount(IModelObject obj)
+    {
+        try
+        {
+            return (obj.GetInterfaceByName("IEntityWithPorts") as IEntityWithPorts)?.Count ?? 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static RouteInfo DescribeRoute(IModelObject route, IProject project)
+    {
+        var info = new RouteInfo();
+        try
+        {
+            var routeParams = route.GetInterfaceByName("IRouteParams") as IRouteParams;
+            if (routeParams is null)
+            {
+                return info;
+            }
+
+            info.SourceId = routeParams.SourceModelObjectId;
+            info.SourcePort = routeParams.SourcePortIndex;
+            info.TargetId = routeParams.TargetModelObjectId;
+            info.TargetPort = routeParams.TargetPortIndex;
+            info.StyleId = routeParams.SystemStyleId;
+            info.StyleName = FindEntityName(project.SystemStyles, info.StyleId);
+            info.Segments = routeParams.GetFlowSegmentCount();
+            info.Joints = routeParams.GetJointCount();
+
+            var onRoute = new List<int>();
+            var onRouteCount = routeParams.GetObjectOnRouteCount();
+            for (var i = 0; i < onRouteCount; i++)
+            {
+                try
+                {
+                    onRoute.Add(routeParams.GetObjectOnRoutePlacement(i).Id);
+                }
+                catch
+                {
+                    // ignored
+                }
+            }
+
+            info.ObjectOnRouteIds = onRoute.ToArray();
+
+            var contour = routeParams.GetContour();
+            if (contour is not null)
+            {
+                var begin = contour.GetBeginPoint();
+                var end = contour.GetEndPoint();
+                info.Length = Units.ToMeters(contour.GetLength());
+                info.Start = new { x = Units.ToMeters(begin.X), y = Units.ToMeters(begin.Y), z = Units.ToMeters(begin.Z) };
+                info.End = new { x = Units.ToMeters(end.X), y = Units.ToMeters(end.Y), z = Units.ToMeters(end.Z) };
+            }
+        }
+        catch
+        {
+            // ignored
+        }
+
+        return info;
+    }
+
+    private static MepLineKind ResolveMepLineKind(string kind)
+    {
+        var normalized = NormalizeMepKind(kind);
+        return normalized switch
+        {
+            "pipe" => new MepLineKind(
+                "pipe",
+                "Pipe",
+                RengaIds.Pipe,
+                project => project.PipeStyles,
+                SystemCategory.SystemCategory_DomesticColdWater),
+            "duct" => new MepLineKind(
+                "duct",
+                "Duct",
+                RengaIds.Duct,
+                project => project.DuctStyles,
+                SystemCategory.SystemCategory_Ventilation),
+            "electrical" or "electrical_circuit_line" or "electrical_line" => new MepLineKind(
+                "electrical",
+                "Electrical circuit line",
+                RengaIds.ElectricalCircuitLine,
+                project => project.ElectricalCircuitLineStyles,
+                SystemCategory.SystemCategory_LightingCircuit),
+            _ => throw new RengaException("MEP line kind must be pipe, duct, or electrical.")
+        };
+    }
+
+    private static MepEquipmentKind ResolveMepEquipmentKind(string kind)
+    {
+        var normalized = NormalizeMepKind(kind);
+        return normalized switch
+        {
+            "equipment" => new MepEquipmentKind(
+                "equipment", RengaIds.Equipment, project => project.EquipmentStyles, false),
+            "mechanical_equipment" => new MepEquipmentKind(
+                "mechanical_equipment", RengaIds.MechanicalEquipment,
+                project => project.MechanicalEquipmentStyles, false),
+            "plumbing_fixture" => new MepEquipmentKind(
+                "plumbing_fixture", RengaIds.PlumbingFixture,
+                project => project.PlumbingFixtureStyles, false),
+            "lighting_fixture" => new MepEquipmentKind(
+                "lighting_fixture", RengaIds.LightingFixture,
+                project => project.LightingFixtureStyles, true),
+            "wiring_accessory" => new MepEquipmentKind(
+                "wiring_accessory", RengaIds.WiringAccessory,
+                project => project.WiringAccessoryStyles, true),
+            "electric_distribution_board" or "distribution_board" => new MepEquipmentKind(
+                "electric_distribution_board", RengaIds.ElectricDistributionBoard,
+                project => project.ElectricDistributionBoardStyles, true),
+            _ => throw new RengaException(
+                "MEP equipment kind must be equipment, mechanical_equipment, plumbing_fixture, " +
+                "lighting_fixture, wiring_accessory, or electric_distribution_board.")
+        };
+    }
+
+    private static MepComponentKind ResolveMepComponentKind(string kind)
+    {
+        var normalized = NormalizeMepKind(kind);
+        return normalized switch
+        {
+            "pipe_fitting" => new MepComponentKind(
+                "pipe_fitting", RengaIds.PipeFitting, project => project.PipeFittingStyles,
+                "PipeFittingRotationAngle"),
+            "pipe_accessory" => new MepComponentKind(
+                "pipe_accessory", RengaIds.PipeAccessory, project => project.PipeAccessoryStyles,
+                "PipeAccessoryAngle"),
+            "duct_fitting" => new MepComponentKind(
+                "duct_fitting", RengaIds.DuctFitting, project => project.DuctFittingStyles,
+                "DuctFittingRotationAngle"),
+            "duct_accessory" => new MepComponentKind(
+                "duct_accessory", RengaIds.DuctAccessory, project => project.DuctAccessoryStyles,
+                "DuctAccessoryAngle"),
+            _ => throw new RengaException(
+                "MEP component kind must be pipe_fitting, pipe_accessory, duct_fitting, or duct_accessory.")
+        };
+    }
+
+    private static MepStyleKind ResolveMepStyleKind(string kind)
+    {
+        var normalized = NormalizeMepKind(kind);
+        return normalized switch
+        {
+            "pipe" => new MepStyleKind("pipe", RengaIds.PipeStyle, project => project.PipeStyles, null),
+            "duct" => new MepStyleKind("duct", RengaIds.DuctStyle, project => project.DuctStyles, null),
+            "electrical_circuit_line" or "electrical" or "electrical_line" => new MepStyleKind(
+                "electrical_circuit_line", RengaIds.ElectricalCircuitLineStyle,
+                project => project.ElectricalCircuitLineStyles, null),
+            "pipe_fitting" => new MepStyleKind(
+                "pipe_fitting", RengaIds.PipeFittingStyle,
+                project => project.PipeFittingStyles, project => project.PipeFittingCategories),
+            "pipe_accessory" => new MepStyleKind(
+                "pipe_accessory", RengaIds.PipeAccessoryStyle,
+                project => project.PipeAccessoryStyles, project => project.PipeAccessoryCategories),
+            "duct_fitting" => new MepStyleKind(
+                "duct_fitting", RengaIds.DuctFittingStyle,
+                project => project.DuctFittingStyles, project => project.DuctFittingCategories),
+            "duct_accessory" => new MepStyleKind(
+                "duct_accessory", RengaIds.DuctAccessoryStyle,
+                project => project.DuctAccessoryStyles, project => project.DuctAccessoryCategories),
+            _ => throw new RengaException(
+                "MEP style kind must be pipe, duct, electrical_circuit_line, pipe_fitting, " +
+                "pipe_accessory, duct_fitting, or duct_accessory.")
+        };
+    }
+
+    private static MepStyle ResolveMepStyle(
+        IProject project,
+        IEntityCollection collection,
+        int? styleId,
+        string kind)
+    {
+        if (styleId is int requested)
+        {
+            var entity = collection.GetById(requested)
+                ?? throw new RengaException($"{kind} style {requested} was not found.");
+            return new MepStyle(entity.Id, entity.Name);
+        }
+
+        if (collection.Count == 0)
+        {
+            throw new RengaException(
+                $"No {kind} styles exist in the project. Create one with renga_create_mep_style.");
+        }
+
+        var first = collection.GetByIndex(0);
+        return new MepStyle(first.Id, first.Name);
+    }
+
+    private static SystemCategory ResolveMepSystemCategory(string? value, string kind)
+    {
+        var fallback = kind switch
+        {
+            "pipe" => SystemCategory.SystemCategory_DomesticColdWater,
+            "duct" => SystemCategory.SystemCategory_Ventilation,
+            "electrical" => SystemCategory.SystemCategory_LightingCircuit,
+            _ => SystemCategory.SystemCategory_Unknown
+        };
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return fallback;
+        }
+
+        var normalized = NormalizeMepKind(value);
+        foreach (var item in MepSystemCategories)
+        {
+            if (string.Equals(item.Name, normalized, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(item.Category.ToString(), value.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    item.Category.ToString().Replace("SystemCategory_", string.Empty, StringComparison.Ordinal),
+                    normalized,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return item.Category;
+            }
+        }
+
+        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numeric) &&
+            Enum.IsDefined(typeof(SystemCategory), numeric))
+        {
+            return (SystemCategory)numeric;
+        }
+
+        throw new RengaException(
+            $"Unknown system category '{value}' for {kind}. Use renga_list_mep_categories.");
+    }
+
+    private static string NormalizeMepKind(string kind) =>
+        kind.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+
+    private static int ParseDuctProfile(string profile) => profile.Trim().ToLowerInvariant() switch
+    {
+        "circle" or "round" or "окружность" => 0,
+        "rectangle" or "rectangular" or "прямоугольник" => 1,
+        _ => throw new RengaException("Duct profile must be circle or rectangle.")
+    };
+
+    private sealed record MepLineKind(
+        string Kind,
+        string DisplayName,
+        Guid TypeId,
+        Func<IProject, IEntityCollection> Styles,
+        SystemCategory DefaultCategory);
+
+    private sealed record MepEquipmentKind(
+        string Kind,
+        Guid TypeId,
+        Func<IProject, IEntityCollection> Styles,
+        bool RequiresHost);
+
+    private sealed record MepComponentKind(
+        string Kind,
+        Guid TypeId,
+        Func<IProject, IEntityCollection> Styles,
+        string AngleParameter);
+
+    private sealed record MepStyleKind(
+        string Kind,
+        Guid TypeId,
+        Func<IProject, IEntityCollection> Styles,
+        Func<IProject, IEntityCollection>? Categories);
+
+    private sealed record MepStyle(int Id, string Name);
+
+    private sealed class RouteInfo
+    {
+        public int SourceId { get; set; }
+        public int SourcePort { get; set; }
+        public int TargetId { get; set; }
+        public int TargetPort { get; set; }
+        public int StyleId { get; set; }
+        public string? StyleName { get; set; }
+        public int Segments { get; set; }
+        public int Joints { get; set; }
+        public double Length { get; set; }
+        public object? Start { get; set; }
+        public object? End { get; set; }
+        public int[] ObjectOnRouteIds { get; set; } = Array.Empty<int>();
+    }
+
+    private static readonly (string Name, SystemCategory Category, string Kind)[] MepSystemCategories =
+    {
+        ("domestic_cold_water", SystemCategory.SystemCategory_DomesticColdWater, "pipe"),
+        ("domestic_hot_water", SystemCategory.SystemCategory_DomesticHotWater, "pipe"),
+        ("domestic_sewerage", SystemCategory.SystemCategory_DomesticSewerage, "pipe"),
+        ("domestic_gas_supply", SystemCategory.SystemCategory_DomesticGasSupply, "pipe"),
+        ("water_fire_extinguishing", SystemCategory.SystemCategory_WaterFireExtinguishing, "pipe"),
+        ("water_heating", SystemCategory.SystemCategory_WaterHeating, "pipe"),
+        ("gas_fire_extinguishing", SystemCategory.SystemCategory_GasFireExtinguishing, "pipe"),
+        ("storm_drain", SystemCategory.SystemCategory_StormDrain, "pipe"),
+        ("industrial_cold_water", SystemCategory.SystemCategory_IndustrialColdWater, "pipe"),
+        ("industrial_hot_water", SystemCategory.SystemCategory_IndustrialHotWater, "pipe"),
+        ("industrial_sewerage", SystemCategory.SystemCategory_IndustrialSewerage, "pipe"),
+        ("other_pipe_system", SystemCategory.SystemCategory_OtherPipeSystem, "pipe"),
+        ("ventilation", SystemCategory.SystemCategory_Ventilation, "duct"),
+        ("exhaust", SystemCategory.SystemCategory_Exhaust, "duct"),
+        ("pressurization", SystemCategory.SystemCategory_Pressurization, "duct"),
+        ("smoke_exhaust", SystemCategory.SystemCategory_SmokeExhaust, "duct"),
+        ("vacuum", SystemCategory.SystemCategory_Vacuum, "duct"),
+        ("other_duct_system", SystemCategory.SystemCategory_OtherDuctSystem, "duct"),
+        ("lighting_circuit", SystemCategory.SystemCategory_LightingCircuit, "electrical"),
+        ("power_circuit", SystemCategory.SystemCategory_PowerCircuit, "electrical"),
+        ("other_electrical_system", SystemCategory.SystemCategory_OtherElectricalSystem, "electrical")
+    };
+
     public object SaveProject(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -3415,29 +4589,50 @@ public sealed class RengaModelService
             return;
         }
 
+        ApplyLateContainerParameters(
+            project,
+            obj.GetParameters(),
+            $"Object {obj.Id}",
+            intParameters,
+            doubleParameters,
+            materialId);
+    }
+
+    private static void ApplyLateContainerParameters(
+        IProject project,
+        IParameterContainer container,
+        string label,
+        IReadOnlyList<(string Name, int Value)> intParameters,
+        IReadOnlyList<(string Name, double Value)> doubleParameters,
+        int? materialId)
+    {
+        if (intParameters.Count == 0 && doubleParameters.Count == 0 && materialId is null)
+        {
+            return;
+        }
+
         var op = StartOperation(project);
         var applied = false;
         try
         {
-            var container = obj.GetParameters();
             foreach (var (name, value) in intParameters)
             {
                 var parameter = FindParameter(container, name)
-                    ?? throw new RengaException($"Parameter '{name}' is not available on {obj.ObjectTypeS}.");
+                    ?? throw new RengaException($"Parameter '{name}' is not available on {label}.");
                 parameter.SetIntValue(value);
             }
 
             foreach (var (name, value) in doubleParameters)
             {
                 var parameter = FindParameter(container, name)
-                    ?? throw new RengaException($"Parameter '{name}' is not available on {obj.ObjectTypeS}.");
+                    ?? throw new RengaException($"Parameter '{name}' is not available on {label}.");
                 parameter.SetDoubleValue(value);
             }
 
             if (materialId is int material)
             {
                 var parameter = FindParameter(container, "MaterialId")
-                    ?? throw new RengaException($"{obj.ObjectTypeS} does not expose MaterialId.");
+                    ?? throw new RengaException($"{label} does not expose MaterialId.");
                 parameter.SetIntValue(material);
             }
 
@@ -3452,7 +4647,7 @@ public sealed class RengaModelService
             }
 
             throw new RengaException(
-                $"Object {obj.Id} was created, but additional parameters could not be applied: {ex.Message}",
+                $"{label} was created, but additional parameters could not be applied: {ex.Message}",
                 ex);
         }
     }
@@ -3751,6 +4946,21 @@ public sealed class RengaModelService
         }
 
         parameter.SetIntValue(value);
+    }
+
+    private static void SetContainerDoubleByName(
+        IParameterContainer container,
+        string parameterName,
+        double value)
+    {
+        var parameter = FindParameter(container, parameterName)
+            ?? throw new RengaException($"Parameter '{parameterName}' is not available.");
+        if (parameter.IsReadOnly)
+        {
+            throw new RengaException($"Parameter '{parameterName}' is read-only.");
+        }
+
+        parameter.SetDoubleValue(value);
     }
 
     private static int ParsePageOrientation(string orientation) =>
@@ -4915,7 +6125,22 @@ public sealed class RengaModelService
         ["isolatedfoundation"] = RengaIds.IsolatedFoundation,
         ["element"] = RengaIds.Element,
         ["material"] = RengaIds.Material,
-        ["line3d"] = RengaIds.Line3D
+        ["line3d"] = RengaIds.Line3D,
+        ["pipe"] = RengaIds.Pipe,
+        ["duct"] = RengaIds.Duct,
+        ["electrical_circuit_line"] = RengaIds.ElectricalCircuitLine,
+        ["pipe_fitting"] = RengaIds.PipeFitting,
+        ["pipe_accessory"] = RengaIds.PipeAccessory,
+        ["duct_fitting"] = RengaIds.DuctFitting,
+        ["duct_accessory"] = RengaIds.DuctAccessory,
+        ["route"] = RengaIds.Route,
+        ["route_point"] = RengaIds.RoutePoint,
+        ["equipment"] = RengaIds.Equipment,
+        ["mechanical_equipment"] = RengaIds.MechanicalEquipment,
+        ["plumbing_fixture"] = RengaIds.PlumbingFixture,
+        ["lighting_fixture"] = RengaIds.LightingFixture,
+        ["wiring_accessory"] = RengaIds.WiringAccessory,
+        ["electric_distribution_board"] = RengaIds.ElectricDistributionBoard
     };
 
     private static readonly Dictionary<string, Func<IProject, IEntityCollection>> StyleCollections =

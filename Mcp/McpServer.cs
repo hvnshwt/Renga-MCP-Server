@@ -512,6 +512,94 @@ public sealed class McpServer
             OptionalString(args, "format"),
             OptionalString(args, "cadVersion")),
         "renga_list_drawing_resources" => _service.ListDrawingResources(),
+        "renga_list_mep_categories" => _service.ListMepCategories(),
+        "renga_create_route_point" => _service.CreateRoutePoint(
+            RequireInt(args, "levelId"),
+            RequireDouble(args, "x"),
+            RequireDouble(args, "y"),
+            RequireDouble(args, "z"),
+            OptionalString(args, "name")),
+        "renga_create_pipe" => _service.CreatePipe(
+            RequireInt(args, "levelId"),
+            RequireDouble(args, "x1"),
+            RequireDouble(args, "y1"),
+            RequireDouble(args, "z1"),
+            RequireDouble(args, "x2"),
+            RequireDouble(args, "y2"),
+            RequireDouble(args, "z2"),
+            OptionalInt(args, "styleId"),
+            OptionalInt(args, "insulationId"),
+            OptionalIntArray(args, "fittingStyleIds"),
+            OptionalString(args, "systemCategory"),
+            OptionalString(args, "mark")),
+        "renga_create_duct" => _service.CreateDuct(
+            RequireInt(args, "levelId"),
+            RequireDouble(args, "x1"),
+            RequireDouble(args, "y1"),
+            RequireDouble(args, "z1"),
+            RequireDouble(args, "x2"),
+            RequireDouble(args, "y2"),
+            RequireDouble(args, "z2"),
+            OptionalInt(args, "styleId"),
+            OptionalInt(args, "insulationId"),
+            OptionalIntArray(args, "fittingStyleIds"),
+            OptionalString(args, "systemCategory"),
+            OptionalString(args, "mark")),
+        "renga_create_electrical_line" => _service.CreateElectricalLine(
+            RequireInt(args, "levelId"),
+            RequireDouble(args, "x1"),
+            RequireDouble(args, "y1"),
+            RequireDouble(args, "z1"),
+            RequireDouble(args, "x2"),
+            RequireDouble(args, "y2"),
+            RequireDouble(args, "z2"),
+            OptionalInt(args, "styleId"),
+            OptionalString(args, "systemCategory"),
+            OptionalString(args, "mark")),
+        "renga_connect_mep" => _service.ConnectMep(
+            RequireString(args, "kind"),
+            RequireInt(args, "sourceId"),
+            RequireInt(args, "sourcePort"),
+            RequireInt(args, "targetId"),
+            RequireInt(args, "targetPort"),
+            OptionalInt(args, "styleId"),
+            OptionalInt(args, "insulationId"),
+            OptionalIntArray(args, "fittingStyleIds"),
+            OptionalString(args, "systemCategory"),
+            OptionalString(args, "mark")),
+        "renga_create_mep_equipment" => _service.CreateMepEquipment(
+            RequireString(args, "kind"),
+            OptionalInt(args, "levelId"),
+            OptionalInt(args, "hostId"),
+            RequireDouble(args, "x"),
+            RequireDouble(args, "y"),
+            RequireDouble(args, "z"),
+            OptionalInt(args, "styleId"),
+            OptionalDouble(args, "rotation"),
+            OptionalString(args, "mark")),
+        "renga_place_mep_component" => _service.PlaceMepComponent(
+            RequireString(args, "kind"),
+            RequireInt(args, "routeId"),
+            RequireDouble(args, "x"),
+            RequireDouble(args, "y"),
+            RequireDouble(args, "z"),
+            OptionalInt(args, "styleId"),
+            OptionalDouble(args, "angle"),
+            OptionalString(args, "mark")),
+        "renga_list_mep_routes" => _service.ListMepRoutes(OptionalInt(args, "limit")),
+        "renga_create_mep_style" => _service.CreateMepStyle(
+            RequireString(args, "kind"),
+            RequireString(args, "name"),
+            OptionalInt(args, "materialId"),
+            OptionalInt(args, "categoryId"),
+            OptionalDouble(args, "diameter"),
+            OptionalDouble(args, "insideDiameter"),
+            OptionalDouble(args, "wallThickness"),
+            OptionalDouble(args, "width"),
+            OptionalDouble(args, "height"),
+            OptionalString(args, "profile"),
+            OptionalInt(args, "conductorNumber"),
+            OptionalInt(args, "conductorStyleId")),
         "renga_save_project" => _service.SaveProject(RequireString(args, "path")),
         "renga_export_ifc" => _service.ExportIfc(RequireString(args, "path")),
         _ => throw new RengaException($"Unknown tool: {name}")
@@ -576,8 +664,41 @@ public sealed class McpServer
         return items;
     }
 
-    private static bool? OptionalBool(JsonElement args, string name)
+    private static IReadOnlyList<int>? OptionalIntArray(JsonElement args, string name)
     {
+        if (!TryGet(args, name, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw new RengaException($"Parameter '{name}' must be an array of integers.");
+        }
+
+        var items = new List<int>();
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out var number))
+            {
+                items.Add(number);
+                continue;
+            }
+
+            if (item.ValueKind == JsonValueKind.String &&
+                int.TryParse(item.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number))
+            {
+                items.Add(number);
+                continue;
+            }
+
+            throw new RengaException($"Parameter '{name}' must be an array of integers.");
+        }
+
+        return items;
+    }
+
+    private static bool? OptionalBool(JsonElement args, string name)    {
         if (!TryGet(args, name, out var value))
         {
             return null;
