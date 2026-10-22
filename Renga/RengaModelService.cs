@@ -1066,7 +1066,7 @@ public sealed class RengaModelService
                 "Use renga_list_parameters to inspect available parameter names and GUIDs.");
 
         var clrValue = ParseJsonParameterValue(value, parameter);
-        return ApplyParameterValue(project, obj, parameter, clrValue, unit);
+        return ApplyParameterValue(project, obj.Id, obj.ObjectTypeS, parameter, clrValue, unit);
     }
 
     public object ListMaterials(string? kind, int? limit)
@@ -1276,7 +1276,8 @@ public sealed class RengaModelService
 
         var result = (Dictionary<string, object?>)ApplyParameterValue(
             project,
-            obj,
+            obj.Id,
+            obj.ObjectTypeS,
             parameter,
             materialId,
             null);
@@ -1330,6 +1331,365 @@ public sealed class RengaModelService
 
             throw;
         }
+    }
+
+    public object CreateStyle(string kind, string name, int? materialId, int? profileId)
+    {
+        name = RequireName(name, "name");
+        var normalized = kind.Trim().ToLowerInvariant();
+        if (!StyleTypeIds.TryGetValue(normalized, out var typeId))
+        {
+            throw new RengaException("Style creation supports: door, window, beam, column, plate.");
+        }
+
+        var project = _connector.RequireProject();
+        var collection = StyleCollections[normalized](project);
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = collection.CreateNewEntityArgs();
+            args.TypeId = typeId;
+            var entity = collection.Create(args)
+                ?? throw new RengaException("Renga did not create the style. " + _connector.LastError);
+
+            var container = GetEntityContainer(entity);
+            SetContainerString(container, RengaParams.EntityName, name);
+            if (materialId is int material)
+            {
+                SetContainerInt(container, RengaParams.MaterialId, material);
+            }
+
+            if (profileId is int profile)
+            {
+                SetContainerInt(container, RengaParams.ProfileId, profile);
+            }
+
+            op.Apply();
+            applied = true;
+
+            var warning = normalized is "beam" or "column" or "plate" &&
+                          profileId is null &&
+                          project.Profiles.Count == 0
+                ? "No profiles exist in this project; the style may have no usable profile geometry."
+                : null;
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["kind"] = normalized,
+                ["id"] = entity.Id,
+                ["uniqueId"] = entity.UniqueIdS,
+                ["name"] = name,
+                ["typeId"] = entity.TypeIdS,
+                ["materialId"] = materialId,
+                ["profileId"] = profileId,
+                ["warning"] = warning,
+                ["parameters"] = DescribeContainerParameters(container, project)
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object ListStyleParameters(string kind, int styleId)
+    {
+        var project = _connector.RequireProject();
+        var entity = FindStyleEntity(project, kind, styleId);
+        var container = GetEntityContainer(entity);
+
+        return new Dictionary<string, object?>
+        {
+            ["kind"] = kind,
+            ["id"] = entity.Id,
+            ["uniqueId"] = entity.UniqueIdS,
+            ["name"] = entity.Name,
+            ["typeId"] = entity.TypeIdS,
+            ["parameters"] = DescribeContainerParameters(container, project)
+        };
+    }
+
+    public object SetStyleParameter(
+        string kind,
+        int styleId,
+        string parameterName,
+        JsonElement value,
+        string? unit)
+    {
+        var project = _connector.RequireProject();
+        var entity = FindStyleEntity(project, kind, styleId);
+        var container = GetEntityContainer(entity);
+        var parameter = FindParameter(container, parameterName)
+            ?? throw new RengaException(
+                $"Parameter '{parameterName}' was not found on style {styleId}. " +
+                "Use renga_list_style_parameters to inspect it.");
+
+        var clrValue = ParseJsonParameterValue(value, parameter);
+        return ApplyParameterValue(project, entity.Id, entity.TypeIdS, parameter, clrValue, unit);
+    }
+
+    public object ListPropertyDefinitions()
+    {
+        var project = _connector.RequireProject();
+        var manager = project.PropertyManager;
+        var definitions = new List<Dictionary<string, object?>>();
+        for (var i = 0; i < manager.PropertyCount; i++)
+        {
+            try
+            {
+                var id = manager.GetPropertyId(i);
+                var name = manager.GetPropertyName(id);
+                var type = manager.GetPropertyType(id);
+                string[] enumeration;
+                try
+                {
+                    enumeration = manager.GetPropertyDescription2(id)?.GetEnumerationItems() ?? Array.Empty<string>();
+                }
+                catch
+                {
+                    enumeration = Array.Empty<string>();
+                }
+
+                definitions.Add(new Dictionary<string, object?>
+                {
+                    ["id"] = id.ToString("B"),
+                    ["name"] = name,
+                    ["type"] = PropertyTypeName(type),
+                    ["enumeration"] = enumeration
+                });
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["count"] = manager.PropertyCount,
+            ["definitions"] = definitions.ToArray()
+        };
+    }
+
+    public object RegisterProperty(
+        string name,
+        string type,
+        IReadOnlyList<string>? enumeration,
+        string? propertyId)
+    {
+        name = RequireName(name, "name");
+        var propertyType = ParsePropertyType(type);
+        var guid = Guid.NewGuid();
+        if (!string.IsNullOrWhiteSpace(propertyId) && !Guid.TryParse(propertyId, out guid))
+        {
+            throw new RengaException("propertyId must be a GUID.");
+        }
+
+        var project = _connector.RequireProject();
+        var manager = project.PropertyManager;
+        if (manager.IsPropertyRegistered(guid))
+        {
+            throw new RengaException($"Property {guid:B} is already registered.");
+        }
+
+        var description = manager.CreatePropertyDescription(name, propertyType);
+        if (enumeration is { Count: > 0 })
+        {
+            description.SetEnumerationItems(enumeration.ToArray());
+        }
+
+        manager.RegisterProperty2(guid, description);
+
+        return new Dictionary<string, object?>
+        {
+            ["created"] = true,
+            ["id"] = guid.ToString("B"),
+            ["name"] = name,
+            ["type"] = PropertyTypeName(propertyType),
+            ["enumeration"] = enumeration ?? Array.Empty<string>()
+        };
+    }
+
+    public object AssignProperty(string propertyId, string objectType)
+    {
+        var project = _connector.RequireProject();
+        if (!Guid.TryParse(propertyId, out var guid))
+        {
+            throw new RengaException("propertyId must be a GUID.");
+        }
+
+        var manager = project.PropertyManager;
+        if (!manager.IsPropertyRegistered(guid))
+        {
+            throw new RengaException($"Property {propertyId} is not registered.");
+        }
+
+        var typeGuid = ResolveObjectTypeGuid(objectType);
+        manager.AssignPropertyToType(guid, typeGuid);
+
+        return new Dictionary<string, object?>
+        {
+            ["assigned"] = true,
+            ["propertyId"] = guid.ToString("B"),
+            ["objectType"] = objectType,
+            ["objectTypeId"] = typeGuid.ToString("B")
+        };
+    }
+
+    public object UnassignProperty(string propertyId, string objectType)
+    {
+        var project = _connector.RequireProject();
+        if (!Guid.TryParse(propertyId, out var guid))
+        {
+            throw new RengaException("propertyId must be a GUID.");
+        }
+
+        var typeGuid = ResolveObjectTypeGuid(objectType);
+        project.PropertyManager.UnassignPropertyFromType(guid, typeGuid);
+
+        return new Dictionary<string, object?>
+        {
+            ["unassigned"] = true,
+            ["propertyId"] = guid.ToString("B"),
+            ["objectType"] = objectType,
+            ["objectTypeId"] = typeGuid.ToString("B")
+        };
+    }
+
+    public object UnregisterProperty(string propertyId)
+    {
+        var project = _connector.RequireProject();
+        if (!Guid.TryParse(propertyId, out var guid))
+        {
+            throw new RengaException("propertyId must be a GUID.");
+        }
+
+        if (!project.PropertyManager.IsPropertyRegistered(guid))
+        {
+            throw new RengaException($"Property {propertyId} is not registered.");
+        }
+
+        project.PropertyManager.UnregisterProperty(guid);
+
+        return new Dictionary<string, object?>
+        {
+            ["removed"] = true,
+            ["propertyId"] = guid.ToString("B")
+        };
+    }
+
+    public object SetProperty(int objectId, string propertyId, JsonElement value)
+    {
+        var project = _connector.RequireProject();
+        var obj = FindObject(project.Model, objectId)
+            ?? throw new RengaException($"Object with ID {objectId} was not found.");
+
+        if (!Guid.TryParse(propertyId, out var guid))
+        {
+            throw new RengaException("propertyId must be a GUID.");
+        }
+
+        IPropertyContainer container;
+        try
+        {
+            container = obj.GetProperties();
+        }
+        catch
+        {
+            throw new RengaException($"Object {objectId} does not support custom properties.");
+        }
+
+        if (!container.Contains(guid))
+        {
+            throw new RengaException(
+                $"Property {propertyId} is not assigned to this object's type. " +
+                "Use renga_assign_property first.");
+        }
+
+        var property = container.Get(guid);
+        var oldHasValue = property.HasValue();
+        var (oldValue, oldUnit) = oldHasValue ? GetPropertyValue(property) : (null, null);
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            switch (property.Type)
+            {
+                case PropertyType.PropertyType_Double:
+                    property.SetDoubleValue(ToDouble(ParseDouble(value)));
+                    break;
+                case PropertyType.PropertyType_String:
+                    property.SetStringValue((string)ParseString(value));
+                    break;
+                case PropertyType.PropertyType_Angle:
+                    property.SetAngleValue(ToDouble(ParseDouble(value)), AngleUnit.AngleUnit_Degrees);
+                    break;
+                case PropertyType.PropertyType_Area:
+                    property.SetAreaValue(ToDouble(ParseDouble(value)), AreaUnit.AreaUnit_Meters2);
+                    break;
+                case PropertyType.PropertyType_Boolean:
+                    property.SetBooleanValue((bool)ParseBool(value));
+                    break;
+                case PropertyType.PropertyType_Enumeration:
+                    var enumerationValue = (string)ParseString(value);
+                    ValidatePropertyEnumeration(project, guid, enumerationValue);
+                    property.SetEnumerationValue(enumerationValue);
+                    break;
+                case PropertyType.PropertyType_Integer:
+                    property.SetIntegerValue(ToInteger(value));
+                    break;
+                case PropertyType.PropertyType_Length:
+                    property.SetLengthValue(ToDouble(ParseDouble(value)), LengthUnit.LengthUnit_Meters);
+                    break;
+                case PropertyType.PropertyType_Logical:
+                    property.SetLogicalValue((bool)ParseBool(value) ? Logical.Logical_True : Logical.Logical_False);
+                    break;
+                case PropertyType.PropertyType_Mass:
+                    property.SetMassValue(ToDouble(ParseDouble(value)), MassUnit.MassUnit_Kilograms);
+                    break;
+                case PropertyType.PropertyType_Volume:
+                    property.SetVolumeValue(ToDouble(ParseDouble(value)), VolumeUnit.VolumeUnit_Meters3);
+                    break;
+                default:
+                    throw new RengaException($"Property type {PropertyTypeName(property.Type)} is not supported for writing.");
+            }
+
+            op.Apply();
+            applied = true;
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+
+        var newHasValue = property.HasValue();
+        var (newValue, newUnit) = newHasValue ? GetPropertyValue(property) : (null, null);
+
+        return new Dictionary<string, object?>
+        {
+            ["updated"] = true,
+            ["objectId"] = objectId,
+            ["propertyId"] = guid.ToString("B"),
+            ["propertyName"] = property.Name,
+            ["propertyType"] = PropertyTypeName(property.Type),
+            ["oldValue"] = oldValue,
+            ["oldUnit"] = oldUnit,
+            ["newValue"] = newValue,
+            ["newUnit"] = newUnit
+        };
     }
 
     private object RebuildSeed(IProject project, IModel model)
@@ -1926,7 +2286,6 @@ public sealed class RengaModelService
 
     private static Dictionary<string, object?>[] DescribeParameters(IModelObject obj, IProject project)
     {
-        var result = new List<Dictionary<string, object?>>();
         IParameterContainer? container;
         try
         {
@@ -1937,11 +2296,16 @@ public sealed class RengaModelService
             return Array.Empty<Dictionary<string, object?>>();
         }
 
-        if (container is null)
-        {
-            return Array.Empty<Dictionary<string, object?>>();
-        }
+        return container is null
+            ? Array.Empty<Dictionary<string, object?>>()
+            : DescribeContainerParameters(container, project);
+    }
 
+    private static Dictionary<string, object?>[] DescribeContainerParameters(
+        IParameterContainer container,
+        IProject project)
+    {
+        var result = new List<Dictionary<string, object?>>();
         var ids = container.GetIds();
         for (var i = 0; i < ids.Count; i++)
         {
@@ -2217,7 +2581,8 @@ public sealed class RengaModelService
 
     private object ApplyParameterValue(
         IProject project,
-        IModelObject obj,
+        int objectId,
+        string objectType,
         IParameter parameter,
         object value,
         string? unit)
@@ -2274,8 +2639,8 @@ public sealed class RengaModelService
         return new Dictionary<string, object?>
         {
             ["updated"] = true,
-            ["objectId"] = obj.Id,
-            ["objectType"] = obj.ObjectTypeS,
+            ["objectId"] = objectId,
+            ["objectType"] = objectType,
             ["parameterId"] = parameter.IdS,
             ["parameterName"] = definition?.Name,
             ["parameterType"] = ParameterTypeName(parameterType),
@@ -2566,6 +2931,113 @@ public sealed class RengaModelService
         }
     }
 
+    private static IParameterContainer GetEntityContainer(IEntity entity)
+    {
+        var container = entity as IParameterContainer
+            ?? entity.GetInterfaceByName("IParameterContainer") as IParameterContainer;
+        return container
+            ?? throw new RengaException($"Entity {entity.Id} does not expose IParameterContainer.");
+    }
+
+    private static void SetContainerInt(IParameterContainer container, Guid parameterId, int value)
+    {
+        if (!container.Contains(parameterId))
+        {
+            throw new RengaException($"Parameter {parameterId:B} is not available.");
+        }
+
+        var parameter = container.Get(parameterId);
+        if (parameter.IsReadOnly)
+        {
+            throw new RengaException($"Parameter {parameterId:B} is read-only.");
+        }
+
+        parameter.SetIntValue(value);
+    }
+
+    private static IEntity FindStyleEntity(IProject project, string kind, int styleId)
+    {
+        var normalized = kind.Trim().ToLowerInvariant();
+        if (!StyleCollections.TryGetValue(normalized, out var getter))
+        {
+            throw new RengaException(
+                $"Unknown style kind '{kind}'. Allowed values: {string.Join(", ", StyleCollections.Keys)}.");
+        }
+
+        return getter(project).GetById(styleId)
+            ?? throw new RengaException($"Style {styleId} was not found in '{normalized}'.");
+    }
+
+    private static Guid ResolveObjectTypeGuid(string objectType)
+    {
+        if (Guid.TryParse(objectType, out var guid))
+        {
+            return guid;
+        }
+
+        if (FriendlyTypeNames.TryGetValue(objectType.Trim(), out var known))
+        {
+            return known;
+        }
+
+        throw new RengaException(
+            $"Unknown object type '{objectType}'. Use a GUID or one of: {string.Join(", ", FriendlyTypeNames.Keys)}.");
+    }
+
+    private static PropertyType ParsePropertyType(string type) => type.Trim().ToLowerInvariant() switch
+    {
+        "double" => PropertyType.PropertyType_Double,
+        "string" => PropertyType.PropertyType_String,
+        "angle" => PropertyType.PropertyType_Angle,
+        "area" => PropertyType.PropertyType_Area,
+        "boolean" or "bool" => PropertyType.PropertyType_Boolean,
+        "enumeration" or "enum" => PropertyType.PropertyType_Enumeration,
+        "integer" or "int" => PropertyType.PropertyType_Integer,
+        "length" => PropertyType.PropertyType_Length,
+        "logical" => PropertyType.PropertyType_Logical,
+        "mass" => PropertyType.PropertyType_Mass,
+        "volume" => PropertyType.PropertyType_Volume,
+        _ => throw new RengaException(
+            "Property type must be one of: string, double, length, angle, area, boolean, enumeration, integer, logical, mass, volume.")
+    };
+
+    private static int ToInteger(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
+        {
+            return number;
+        }
+
+        if (value.ValueKind == JsonValueKind.String &&
+            int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number))
+        {
+            return number;
+        }
+
+        throw new RengaException("Integer property requires an integer.");
+    }
+
+    private static void ValidatePropertyEnumeration(IProject project, Guid propertyId, string value)
+    {
+        string[] items;
+        try
+        {
+            items = project.PropertyManager.GetPropertyDescription2(propertyId)?.GetEnumerationItems()
+                ?? Array.Empty<string>();
+        }
+        catch
+        {
+            items = Array.Empty<string>();
+        }
+
+        if (items.Length > 0 &&
+            !items.Any(item => string.Equals(item, value, StringComparison.Ordinal)))
+        {
+            throw new RengaException(
+                $"Value '{value}' is not allowed. Available values: {string.Join(", ", items)}.");
+        }
+    }
+
     private static void SetContainerString(IParameterContainer container, Guid parameterId, string value)
     {
         if (!container.Contains(parameterId))
@@ -2643,6 +3115,15 @@ public sealed class RengaModelService
             : text;
     }
 
+    private static readonly Dictionary<string, Guid> StyleTypeIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["door"] = RengaIds.DoorStyle,
+        ["window"] = RengaIds.WindowStyle,
+        ["beam"] = RengaIds.BeamStyle,
+        ["column"] = RengaIds.ColumnStyle,
+        ["plate"] = RengaIds.PlateStyle
+    };
+
     private static readonly Dictionary<string, Guid> FriendlyTypeNames = new(StringComparer.OrdinalIgnoreCase)
     {
         ["level"] = RengaIds.Level,
@@ -2690,6 +3171,7 @@ public sealed class RengaModelService
             ["duct_accessory"] = project => project.DuctAccessoryStyles,
             ["electrical_circuit_line"] = project => project.ElectricalCircuitLineStyles,
             ["system"] = project => project.SystemStyles,
+            ["profile"] = project => project.Profiles,
             ["material"] = project => project.Materials,
             ["layered_material"] = project => project.LayeredMaterials
         };
@@ -2705,6 +3187,8 @@ public sealed class RengaModelService
         public bool Managed { get; set; }
     }
 }
+
+
 
 
 

@@ -12,6 +12,13 @@ public static class RengaIds
     public static readonly Guid Door = new("1cfba99c-01e7-4078-ae1a-3e2ff0673599");
     public static readonly Guid Window = new("2b02b353-2ca5-4566-88bb-917ea8460174");
     public static readonly Guid Material = new("0abcb18f-0aaf-4509-bf89-5c5fad9d5d8b");
+    public static readonly Guid LayeredMaterial = new("0f0adba0-5c06-46c0-9c8a-b9d69ef1251f");
+    public static readonly Guid DoorStyle = new("19d0649f-582a-488e-a52b-585c1151a5e4");
+    public static readonly Guid WindowStyle = new("fac43446-031c-413e-9993-6e9cf9f2306a");
+    public static readonly Guid BeamStyle = new("cf2b8b04-f595-4432-98f4-8234c95adbdd");
+    public static readonly Guid ColumnStyle = new("be49a354-19b7-435a-8957-9ef8782630c2");
+    public static readonly Guid PlateStyle = new("9b60d6ad-3468-478e-94df-a535c5aeaa3e");
+    public static readonly Guid Profile = new("8734b5cd-57fc-409e-aefe-1fdc449bcb5c");
     public static readonly Guid Opening = new("fc443d5a-b76c-45e5-b91c-520ef0896109");
     public static readonly Guid Plate = new("62cf086e-5a39-4484-840c-ffa6a1c6e2b7");
     public static readonly Guid Room = new("f1a805ff-573d-f46b-ffba-57f4bccaa6ed");
@@ -45,6 +52,7 @@ public static class RengaParams
     public static readonly Guid MassDensity = new("469788e6-d7a6-4f73-90cc-fa756b14bc5c");
     public static readonly Guid MaterialId = new("d5c738c4-7ffa-46cc-a440-52ba62de6ae0");
     public static readonly Guid LayeredMaterialId = new("2cbc4964-61a0-4553-8103-36e2dd2ab31c");
+    public static readonly Guid ProfileId = new("6bfc8884-80d5-4aae-a86c-f2e5ae81a888");
     public static readonly Guid Color = new("87d2df84-d69e-495f-a46e-4468185268c3");
 }
 

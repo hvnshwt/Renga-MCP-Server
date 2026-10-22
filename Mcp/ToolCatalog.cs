@@ -357,7 +357,7 @@ public static class ToolCatalog
             {
               "type": "object",
               "properties": {
-                "kind": { "type": "string", "description": "Optional style kind: beam, column, door, window, plate, element, pipe, duct, material, layered_material, and others." },
+                "kind": { "type": "string", "description": "Optional style kind: beam, column, door, window, plate, element, profile, pipe, duct, material, layered_material, and others." },
                 "limit": { "type": "integer", "description": "Optional maximum number of items. Default 500." }
               },
               "additionalProperties": false
@@ -391,6 +391,148 @@ public static class ToolCatalog
                 "density": { "type": "number", "description": "Optional mass density in kg/m3." }
               },
               "required": ["name"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_style",
+            "Create a style",
+            "Creates a native style. Supported kinds: door, window, beam, column, plate. Beam, column, and plate styles may require an existing profileId.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "description": "Style kind: door, window, beam, column, or plate." },
+                "name": { "type": "string", "description": "Style name." },
+                "materialId": { "type": "integer", "description": "Optional material ID for the style." },
+                "profileId": { "type": "integer", "description": "Optional profile ID for beam, column, or plate styles." }
+              },
+              "required": ["kind", "name"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_list_style_parameters",
+            "List style parameters",
+            "Lists parameters of a style entity. Use renga_list_styles to find style IDs.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "description": "Style kind, for example door, window, beam, column, plate, material, or layered_material." },
+                "styleId": { "type": "integer", "description": "Local style entity ID." }
+              },
+              "required": ["kind", "styleId"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_set_style_parameter",
+            "Set a style parameter",
+            "Sets a parameter of a style entity by GUID or name. The same unit rules as renga_set_parameter apply.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "description": "Style kind." },
+                "styleId": { "type": "integer", "description": "Local style entity ID." },
+                "parameter": { "type": "string", "description": "Parameter GUID or name." },
+                "value": { "type": ["number", "string", "boolean"], "description": "New value." },
+                "unit": { "type": "string", "description": "Optional unit: m, mm, cm, deg, rad, m2, m3, kg, raw, etc." }
+              },
+              "required": ["kind", "styleId", "parameter", "value"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_list_property_definitions",
+            "List custom property definitions",
+            "Lists registered custom properties in the project with IDs, names, types, and enumeration values.",
+            """
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_register_property",
+            "Register a custom property",
+            "Registers a new custom property definition for the project. The property must then be assigned to an object type.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string", "description": "Property name." },
+                "type": { "type": "string", "description": "Property type: string, double, length, angle, area, boolean, enumeration, integer, logical, mass, volume." },
+                "enumeration": {
+                  "type": "array",
+                  "description": "Optional enumeration values for type 'enumeration'.",
+                  "items": { "type": "string" }
+                },
+                "propertyId": { "type": "string", "description": "Optional GUID. A new GUID is generated when omitted." }
+              },
+              "required": ["name", "type"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_assign_property",
+            "Assign a custom property to a type",
+            "Assigns a registered custom property to an object type, for example wall, door, or window.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "propertyId": { "type": "string", "description": "Custom property GUID." },
+                "objectType": { "type": "string", "description": "Object type name or type GUID." }
+              },
+              "required": ["propertyId", "objectType"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_unassign_property",
+            "Unassign a custom property from a type",
+            "Removes a custom property assignment from an object type.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "propertyId": { "type": "string", "description": "Custom property GUID." },
+                "objectType": { "type": "string", "description": "Object type name or type GUID." }
+              },
+              "required": ["propertyId", "objectType"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_unregister_property",
+            "Unregister a custom property",
+            "Removes a custom property definition from the project.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "propertyId": { "type": "string", "description": "Custom property GUID." }
+              },
+              "required": ["propertyId"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_set_property",
+            "Set a custom property value",
+            "Sets a custom property value on an object. The property must first be registered and assigned to the object type.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Local model object ID." },
+                "propertyId": { "type": "string", "description": "Custom property GUID." },
+                "value": { "type": ["number", "string", "boolean"], "description": "New value." }
+              },
+              "required": ["objectId", "propertyId", "value"],
               "additionalProperties": false
             }
             """),

@@ -362,6 +362,38 @@ public sealed class McpServer
         "renga_create_material" => _service.CreateMaterial(
             RequireString(args, "name"),
             OptionalDouble(args, "density")),
+        "renga_create_style" => _service.CreateStyle(
+            RequireString(args, "kind"),
+            RequireString(args, "name"),
+            OptionalInt(args, "materialId"),
+            OptionalInt(args, "profileId")),
+        "renga_list_style_parameters" => _service.ListStyleParameters(
+            RequireString(args, "kind"),
+            RequireInt(args, "styleId")),
+        "renga_set_style_parameter" => _service.SetStyleParameter(
+            RequireString(args, "kind"),
+            RequireInt(args, "styleId"),
+            RequireString(args, "parameter"),
+            RequireValue(args, "value"),
+            OptionalString(args, "unit")),
+        "renga_list_property_definitions" => _service.ListPropertyDefinitions(),
+        "renga_register_property" => _service.RegisterProperty(
+            RequireString(args, "name"),
+            RequireString(args, "type"),
+            OptionalStringArray(args, "enumeration"),
+            OptionalString(args, "propertyId")),
+        "renga_assign_property" => _service.AssignProperty(
+            RequireString(args, "propertyId"),
+            RequireString(args, "objectType")),
+        "renga_unassign_property" => _service.UnassignProperty(
+            RequireString(args, "propertyId"),
+            RequireString(args, "objectType")),
+        "renga_unregister_property" => _service.UnregisterProperty(
+            RequireString(args, "propertyId")),
+        "renga_set_property" => _service.SetProperty(
+            RequireInt(args, "objectId"),
+            RequireString(args, "propertyId"),
+            RequireValue(args, "value")),
         "renga_save_project" => _service.SaveProject(RequireString(args, "path")),
         "renga_export_ifc" => _service.ExportIfc(RequireString(args, "path")),
         _ => throw new RengaException($"Unknown tool: {name}")
@@ -398,6 +430,32 @@ public sealed class McpServer
         }
 
         return value.GetString();
+    }
+
+    private static IReadOnlyList<string>? OptionalStringArray(JsonElement args, string name)
+    {
+        if (!TryGet(args, name, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw new RengaException($"Parameter '{name}' must be an array of strings.");
+        }
+
+        var items = new List<string>();
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+            {
+                throw new RengaException($"Parameter '{name}' must be an array of strings.");
+            }
+
+            items.Add(item.GetString() ?? string.Empty);
+        }
+
+        return items;
     }
 
     private static bool? OptionalBool(JsonElement args, string name)
