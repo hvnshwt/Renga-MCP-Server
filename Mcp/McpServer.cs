@@ -490,6 +490,28 @@ public sealed class McpServer
             RequireInt(args, "objectId"),
             RequireString(args, "propertyId"),
             RequireValue(args, "value")),
+        "renga_list_drawings" => _service.ListDrawings(),
+        "renga_get_drawing_title_blocks" => _service.GetDrawingTitleBlocks(
+            RequireString(args, "drawingId")),
+        "renga_create_drawing" => _service.CreateDrawing(
+            RequireString(args, "name"),
+            OptionalString(args, "pageFormat"),
+            OptionalString(args, "orientation"),
+            OptionalString(args, "layoutStyle")),
+        "renga_rename_drawing" => _service.RenameDrawing(
+            RequireString(args, "drawingId"),
+            RequireString(args, "name")),
+        "renga_delete_drawing" => _service.DeleteDrawing(RequireString(args, "drawingId")),
+        "renga_export_drawing" => _service.ExportDrawing(
+            RequireString(args, "drawingId"),
+            RequireString(args, "path"),
+            OptionalString(args, "format"),
+            OptionalString(args, "cadVersion")),
+        "renga_export_all_drawings" => _service.ExportAllDrawings(
+            RequireString(args, "directory"),
+            OptionalString(args, "format"),
+            OptionalString(args, "cadVersion")),
+        "renga_list_drawing_resources" => _service.ListDrawingResources(),
         "renga_save_project" => _service.SaveProject(RequireString(args, "path")),
         "renga_export_ifc" => _service.ExportIfc(RequireString(args, "path")),
         _ => throw new RengaException($"Unknown tool: {name}")

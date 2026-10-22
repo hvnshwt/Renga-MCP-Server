@@ -1759,6 +1759,326 @@ public sealed class RengaModelService
         }
     }
 
+    public object ListDrawings()
+    {
+        var project = _connector.RequireProject();
+        var items = DescribeDrawings(project);
+        return new Dictionary<string, object?>
+        {
+            ["count"] = items.Length,
+            ["drawings"] = items
+        };
+    }
+
+    public object GetDrawingTitleBlocks(string drawingId)
+    {
+        var project = _connector.RequireProject();
+        var drawing = FindLegacyDrawing(project, drawingId)
+            ?? throw new RengaException(
+                $"Drawing {drawingId} was not found. Use renga_list_drawings to inspect drawings.");
+
+        var blocks = new List<Dictionary<string, object?>>();
+        var count = drawing.TitleBlockInstanceCount;
+        for (var i = 0; i < count; i++)
+        {
+            var titleBlock = drawing.GetTitleBlockInstance(i);
+            var rows = titleBlock.RowCount;
+            var columns = titleBlock.ColumnCount;
+            var cells = new string[rows][];
+            for (var row = 0; row < rows; row++)
+            {
+                cells[row] = new string[columns];
+                for (var column = 0; column < columns; column++)
+                {
+                    cells[row][column] = titleBlock.GetCellValue(column, row);
+                }
+            }
+
+            blocks.Add(new Dictionary<string, object?>
+            {
+                ["index"] = i,
+                ["name"] = titleBlock.Name,
+                ["rows"] = rows,
+                ["columns"] = columns,
+                ["cells"] = cells
+            });
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["drawingId"] = drawingId,
+            ["name"] = drawing.Name,
+            ["count"] = count,
+            ["titleBlocks"] = blocks.ToArray()
+        };
+    }
+
+    public object CreateDrawing(string name, string? pageFormat, string? orientation, string? layoutStyle)
+    {
+        name = RequireName(name, "name");
+        var orientationValue = string.IsNullOrWhiteSpace(orientation)
+            ? (int?)null
+            : ParsePageOrientation(orientation);
+
+        var project = _connector.RequireProject();
+        var pageFormatId = string.IsNullOrWhiteSpace(pageFormat)
+            ? (int?)null
+            : ResolveEntityReference(project.PageFormatStyles, pageFormat, "page format").Id;
+        var layoutStyleId = string.IsNullOrWhiteSpace(layoutStyle)
+            ? (int?)null
+            : ResolveEntityReference(project.LayoutStyles, layoutStyle, "layout style").Id;
+
+        var op = StartOperation(project);
+        IEntity drawing;
+        var applied = false;
+        try
+        {
+            var args = project.Drawings2.CreateNewEntityArgs();
+            args.TypeId = RengaIds.Drawing;
+            drawing = project.Drawings2.Create(args)
+                ?? throw new RengaException("Renga did not create the drawing. " + _connector.LastError);
+            SetContainerString(GetEntityContainer(drawing), RengaParams.EntityName, name);
+            op.Apply();
+            applied = true;
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+
+        if (pageFormatId is not null || layoutStyleId is not null || orientationValue is not null)
+        {
+            var settingsOp = StartOperation(project);
+            var settingsApplied = false;
+            try
+            {
+                var container = GetEntityContainer(drawing);
+                if (pageFormatId is int format) SetContainerIntByName(container, "PageFormatId", format);
+                if (layoutStyleId is int layout) SetContainerIntByName(container, "LayoutStyleId", layout);
+                if (orientationValue is int side) SetContainerIntByName(container, "PageOrientation", side);
+                settingsOp.Apply();
+                settingsApplied = true;
+            }
+            catch (Exception ex)
+            {
+                if (!settingsApplied)
+                {
+                    TryRollback(settingsOp);
+                }
+
+                throw new RengaException(
+                    $"Drawing {drawing.Id} was created, but page settings could not be applied: {ex.Message}",
+                    ex);
+            }
+        }
+
+        return DescribeDrawing(project, drawing);
+    }
+
+    public object RenameDrawing(string drawingId, string name)
+    {
+        name = RequireName(name, "name");
+        var project = _connector.RequireProject();
+        var drawing = RequireDrawingEntity(project, drawingId);
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            SetContainerString(GetEntityContainer(drawing), RengaParams.EntityName, name);
+            op.Apply();
+            applied = true;
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+
+        return DescribeDrawing(project, RequireDrawingEntity(project, drawingId));
+    }
+
+    public object DeleteDrawing(string drawingId)
+    {
+        var project = _connector.RequireProject();
+        var drawing = RequireDrawingEntity(project, drawingId);
+        var entityId = drawing.Id;
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            project.Drawings2.RemoveByUniqueIdS(drawingId);
+            op.Apply();
+            applied = true;
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["deleted"] = true,
+            ["drawingId"] = drawingId,
+            ["entityId"] = entityId,
+            ["remaining"] = project.Drawings2.Count
+        };
+    }
+
+    public object ExportDrawing(string drawingId, string path, string? format, string? cadVersion)
+    {
+        var project = _connector.RequireProject();
+        var normalizedFormat = NormalizeDrawingFormat(format);
+        var extension = DrawingFormatExtension(normalizedFormat);
+        var fullPath = EnsureOutputPath(path, extension);
+        var drawing = FindLegacyDrawing(project, drawingId)
+            ?? throw new RengaException(
+                $"Drawing {drawingId} was not found. Use renga_list_drawings to inspect drawings.");
+        var version = ParseAutocadVersion(cadVersion);
+        var result = ExportDrawingFile(drawing, fullPath, normalizedFormat, version);
+        _connector.Check(result, $"ExportTo{normalizedFormat.ToUpperInvariant()}");
+
+        return new Dictionary<string, object?>
+        {
+            ["exported"] = true,
+            ["drawingId"] = drawingId,
+            ["name"] = drawing.Name,
+            ["format"] = normalizedFormat,
+            ["path"] = fullPath,
+            ["bytes"] = new FileInfo(fullPath).Length
+        };
+    }
+
+    public object ExportAllDrawings(string directory, string? format, string? cadVersion)
+    {
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            throw new RengaException("Directory must be non-empty.");
+        }
+
+        var project = _connector.RequireProject();
+        var normalizedFormat = NormalizeDrawingFormat(format);
+        var extension = DrawingFormatExtension(normalizedFormat);
+        var version = ParseAutocadVersion(cadVersion);
+        var fullDirectory = Path.GetFullPath(directory);
+        Directory.CreateDirectory(fullDirectory);
+
+        var items = new List<Dictionary<string, object?>>();
+        var exported = 0;
+        for (var i = 0; i < project.Drawings2.Count; i++)
+        {
+            var entity = project.Drawings2.GetByIndex(i);
+            var drawingId = entity.UniqueIdS;
+            var name = GetStringParameter(GetEntityContainer(entity), "EntityName") ?? entity.Name;
+            var drawing = FindLegacyDrawing(project, drawingId);
+            if (drawing is null)
+            {
+                items.Add(new Dictionary<string, object?>
+                {
+                    ["index"] = i,
+                    ["drawingId"] = drawingId,
+                    ["name"] = name,
+                    ["error"] = "Drawing is not available through the legacy drawing collection."
+                });
+                continue;
+            }
+
+            var fileName = $"{i:00}-{SanitizeFileName(name)}.{extension}";
+            var fullPath = Path.Combine(fullDirectory, fileName);
+            try
+            {
+                var result = ExportDrawingFile(drawing, fullPath, normalizedFormat, version);
+                if (result != 0)
+                {
+                    items.Add(new Dictionary<string, object?>
+                    {
+                        ["index"] = i,
+                        ["drawingId"] = drawingId,
+                        ["name"] = name,
+                        ["error"] = $"Export failed with code {result}. {_connector.LastError}"
+                    });
+                    continue;
+                }
+
+                exported++;
+                items.Add(new Dictionary<string, object?>
+                {
+                    ["index"] = i,
+                    ["drawingId"] = drawingId,
+                    ["name"] = name,
+                    ["path"] = fullPath,
+                    ["bytes"] = new FileInfo(fullPath).Length
+                });
+            }
+            catch (Exception ex)
+            {
+                items.Add(new Dictionary<string, object?>
+                {
+                    ["index"] = i,
+                    ["drawingId"] = drawingId,
+                    ["name"] = name,
+                    ["error"] = ex.Message
+                });
+            }
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["directory"] = fullDirectory,
+            ["format"] = normalizedFormat,
+            ["exported"] = exported,
+            ["failed"] = project.Drawings2.Count - exported,
+            ["drawings"] = items.ToArray()
+        };
+    }
+
+    public object ListDrawingResources()
+    {
+        var project = _connector.RequireProject();
+
+        var pageFormats = new List<Dictionary<string, object?>>();
+        for (var i = 0; i < project.PageFormatStyles.Count; i++)
+        {
+            var entity = project.PageFormatStyles.GetByIndex(i);
+            var container = GetEntityContainer(entity);
+            var widthMm = GetDoubleParameter(container, "PageFormatWidth");
+            var heightMm = GetDoubleParameter(container, "PageFormatHeight");
+            pageFormats.Add(new Dictionary<string, object?>
+            {
+                ["id"] = entity.Id,
+                ["name"] = entity.Name,
+                ["widthMm"] = widthMm,
+                ["heightMm"] = heightMm,
+                ["width"] = widthMm is double width ? width / Units.MillimetersPerMeter : null,
+                ["height"] = heightMm is double height ? height / Units.MillimetersPerMeter : null,
+                ["referenceName"] = GetStringParameter(container, "PageFormatReferenceName")
+            });
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["pageFormats"] = pageFormats.ToArray(),
+            ["layoutStyles"] = DescribeEntities(project.LayoutStyles),
+            ["scales"] = DescribeEntities(project.Scales),
+            ["legendStyles"] = DescribeEntities(project.LegendStyles)
+        };
+    }
+
     public object SaveProject(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -3183,6 +3503,343 @@ public sealed class RengaModelService
         "left" or "слева" => 2,
         _ => throw new RengaException("Position must be right, center, or left.")
     };
+
+    private static Dictionary<string, object?>[] DescribeDrawings(IProject project)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        for (var i = 0; i < project.Drawings2.Count; i++)
+        {
+            result.Add(DescribeDrawing(project, project.Drawings2.GetByIndex(i)));
+        }
+
+        return result.ToArray();
+    }
+
+    private static Dictionary<string, object?> DescribeDrawing(IProject project, IEntity entity)
+    {
+        var container = GetEntityContainer(entity);
+        var pageFormatId = GetIntParameter(container, "PageFormatId") ?? 0;
+        var layoutStyleId = GetIntParameter(container, "LayoutStyleId") ?? 0;
+        var drawingId = entity.UniqueIdS;
+        var legacy = FindLegacyDrawing(project, drawingId);
+
+        int titleBlocks = 0;
+        try
+        {
+            titleBlocks = legacy?.TitleBlockInstanceCount ?? 0;
+        }
+        catch
+        {
+            // ignored
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["index"] = FindDrawingIndex(project, entity.Id),
+            ["entityId"] = entity.Id,
+            ["uniqueId"] = drawingId,
+            ["drawingId"] = drawingId,
+            ["name"] = GetStringParameter(container, "EntityName") ?? entity.Name,
+            ["pageFormatId"] = pageFormatId,
+            ["pageFormatName"] = pageFormatId > 0
+                ? FindEntityName(project.PageFormatStyles, pageFormatId)
+                : null,
+            ["layoutStyleId"] = layoutStyleId,
+            ["layoutStyleName"] = layoutStyleId > 0
+                ? FindEntityName(project.LayoutStyles, layoutStyleId)
+                : null,
+            ["titleBlocks"] = titleBlocks
+        };
+    }
+
+    private static IEntity RequireDrawingEntity(IProject project, string drawingId)
+    {
+        if (!Guid.TryParse(drawingId, out _))
+        {
+            throw new RengaException(
+                "drawingId must be a GUID from renga_list_drawings.");
+        }
+
+        IEntity? entity;
+        try
+        {
+            entity = project.Drawings2.GetByUniqueIdS(drawingId);
+        }
+        catch
+        {
+            entity = null;
+        }
+
+        if (entity is null)
+        {
+            throw new RengaException(
+                $"Drawing {drawingId} was not found. Use renga_list_drawings to inspect drawings.");
+        }
+
+        if (entity.TypeId != RengaIds.Drawing)
+        {
+            throw new RengaException($"Entity {drawingId} is not a drawing.");
+        }
+
+        return entity;
+    }
+
+    private static IDrawing? FindLegacyDrawing(IProject project, string drawingId)
+    {
+        if (!Guid.TryParse(drawingId, out var guid))
+        {
+            return null;
+        }
+
+        try
+        {
+            for (var i = 0; i < project.Drawings.Count; i++)
+            {
+                try
+                {
+                    var drawing = project.Drawings.Get(i);
+                    if (drawing.Id == guid)
+                    {
+                        return drawing;
+                    }
+                }
+                catch
+                {
+                    // a stale entry should not prevent matching the other drawings
+                }
+            }
+        }
+        catch
+        {
+            // ignored
+        }
+
+        return null;
+    }
+
+    private static int FindDrawingIndex(IProject project, int entityId)
+    {
+        for (var i = 0; i < project.Drawings2.Count; i++)
+        {
+            if (project.Drawings2.GetByIndex(i).Id == entityId)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static IEntity ResolveEntityReference(
+        IEntityCollection collection,
+        string reference,
+        string label)
+    {
+        var trimmed = reference.Trim();
+        if (int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+        {
+            try
+            {
+                var byId = collection.GetById(id);
+                if (byId is not null)
+                {
+                    return byId;
+                }
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+
+        for (var i = 0; i < collection.Count; i++)
+        {
+            var entity = collection.GetByIndex(i);
+            if (string.Equals(entity.Name, trimmed, StringComparison.OrdinalIgnoreCase))
+            {
+                return entity;
+            }
+        }
+
+        throw new RengaException(
+            $"Unknown {label} '{reference}'. Use renga_list_drawing_resources to inspect available values.");
+    }
+
+    private static Dictionary<string, object?>[] DescribeEntities(IEntityCollection collection)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        for (var i = 0; i < collection.Count; i++)
+        {
+            var entity = collection.GetByIndex(i);
+            result.Add(new Dictionary<string, object?>
+            {
+                ["id"] = entity.Id,
+                ["name"] = entity.Name
+            });
+        }
+
+        return result.ToArray();
+    }
+
+    private static int? GetIntParameter(IParameterContainer container, string parameterName)
+    {
+        try
+        {
+            var parameter = FindParameter(container, parameterName);
+            if (parameter is null ||
+                parameter.ValueType != ParameterValueType.ParameterValueType_Int)
+            {
+                return null;
+            }
+
+            return parameter.GetIntValue();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static double? GetDoubleParameter(IParameterContainer container, string parameterName)
+    {
+        try
+        {
+            var parameter = FindParameter(container, parameterName);
+            if (parameter is null ||
+                parameter.ValueType != ParameterValueType.ParameterValueType_Double)
+            {
+                return null;
+            }
+
+            return parameter.GetDoubleValue();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? GetStringParameter(IParameterContainer container, string parameterName)
+    {
+        try
+        {
+            var parameter = FindParameter(container, parameterName);
+            if (parameter is null ||
+                parameter.ValueType != ParameterValueType.ParameterValueType_String)
+            {
+                return null;
+            }
+
+            return parameter.GetStringValue();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void SetContainerIntByName(
+        IParameterContainer container,
+        string parameterName,
+        int value)
+    {
+        var parameter = FindParameter(container, parameterName)
+            ?? throw new RengaException($"Parameter '{parameterName}' is not available.");
+        if (parameter.IsReadOnly)
+        {
+            throw new RengaException($"Parameter '{parameterName}' is read-only.");
+        }
+
+        parameter.SetIntValue(value);
+    }
+
+    private static int ParsePageOrientation(string orientation) =>
+        orientation.Trim().ToLowerInvariant() switch
+        {
+            "portrait" or "книжная" => 1,
+            "landscape" or "альбомная" => 0,
+            _ => throw new RengaException("Page orientation must be portrait or landscape.")
+        };
+
+    private static string NormalizeDrawingFormat(string? format)
+    {
+        var normalized = string.IsNullOrWhiteSpace(format)
+            ? "pdf"
+            : format.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "pdf" => "pdf",
+            "dxf" => "dxf",
+            "dwg" => "dwg",
+            "xps" or "openxps" => "xps",
+            _ => throw new RengaException("Drawing format must be pdf, dxf, dwg, or xps.")
+        };
+    }
+
+    private static string DrawingFormatExtension(string format) => format;
+
+    private static AutocadVersion ParseAutocadVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return AutocadVersion.AutocadVersion_v2018;
+        }
+
+        var normalized = version.Trim().ToLowerInvariant().TrimStart('v', 'r');
+        return normalized switch
+        {
+            "2000" => AutocadVersion.AutocadVersion_v2000,
+            "2004" => AutocadVersion.AutocadVersion_v2004,
+            "2007" => AutocadVersion.AutocadVersion_v2007,
+            "2010" => AutocadVersion.AutocadVersion_v2010,
+            "2013" => AutocadVersion.AutocadVersion_v2013,
+            "2018" => AutocadVersion.AutocadVersion_v2018,
+            _ => throw new RengaException(
+                "AutoCAD version must be v2000, v2004, v2007, v2010, v2013, or v2018.")
+        };
+    }
+
+    private static int ExportDrawingFile(
+        IDrawing drawing,
+        string path,
+        string format,
+        AutocadVersion version) => format switch
+    {
+        "pdf" => drawing.ExportToPdf(path, true),
+        "dxf" => drawing.ExportToDxf(path, version, true),
+        "dwg" => drawing.ExportToDwg(path, version, true),
+        "xps" => drawing.ExportToOpenXps(path, true),
+        _ => throw new RengaException($"Unsupported drawing format '{format}'.")
+    };
+
+    private static string EnsureOutputPath(string path, string extension)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new RengaException("Output path must be non-empty.");
+        }
+
+        var fullPath = Path.GetFullPath(path);
+        if (!string.Equals(Path.GetExtension(fullPath), "." + extension, StringComparison.OrdinalIgnoreCase))
+        {
+            fullPath = Path.ChangeExtension(fullPath, extension);
+        }
+
+        var directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        return fullPath;
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var sanitized = new string(name.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray()).Trim();
+        return string.IsNullOrWhiteSpace(sanitized) ? "drawing" : sanitized;
+    }
 
     private static bool IsLevel(IModelObject obj) => obj.ObjectType == RengaIds.Level;
 

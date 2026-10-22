@@ -740,6 +740,121 @@ public static class ToolCatalog
             }
             """),
         new ToolSpec(
+            "renga_list_drawings",
+            "List drawings",
+            "Lists sheets (drawings) in the project with their index, entity ID, name, page format, layout style, and title block count.",
+            """
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_get_drawing_title_blocks",
+            "Read drawing title blocks",
+            "Reads title block instances of a drawing, including row and column values. Title blocks are read-only.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "drawingId": { "type": "string", "description": "Drawing GUID from renga_list_drawings." }
+              },
+              "required": ["drawingId"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_drawing",
+            "Create a drawing sheet",
+            "Creates a new drawing (sheet). Page format and layout style can be specified by name or ID. Orientation is portrait or landscape.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string", "description": "Drawing name." },
+                "pageFormat": { "type": "string", "description": "Optional page format name (for example A4) or ID. Use renga_list_drawing_resources." },
+                "layoutStyle": { "type": "string", "description": "Optional layout style name or ID. Use renga_list_drawing_resources." },
+                "orientation": { "type": "string", "description": "Optional orientation: portrait or landscape." }
+              },
+              "required": ["name"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_rename_drawing",
+            "Rename a drawing",
+            "Renames a drawing sheet by its drawingId. Use renga_list_drawings to obtain drawingId.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "drawingId": { "type": "string", "description": "Drawing GUID from renga_list_drawings." },
+                "name": { "type": "string", "description": "New drawing name." }
+              },
+              "required": ["drawingId", "name"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_delete_drawing",
+            "Delete a drawing",
+            "Deletes a drawing sheet by its drawingId. Use renga_list_drawings to obtain drawingId.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "drawingId": { "type": "string", "description": "Drawing GUID from renga_list_drawings." }
+              },
+              "required": ["drawingId"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_export_drawing",
+            "Export a drawing",
+            "Exports a drawing sheet to PDF, DXF, DWG, or XPS. The matching extension is appended to the path when missing.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "drawingId": { "type": "string", "description": "Drawing GUID from renga_list_drawings." },
+                "path": { "type": "string", "description": "Destination file path." },
+                "format": { "type": "string", "description": "Optional format: pdf, dxf, dwg, or xps. Default pdf." },
+                "cadVersion": { "type": "string", "description": "Optional AutoCAD version for DXF/DWG: v2000, v2004, v2007, v2010, v2013, or v2018. Default v2018." }
+              },
+              "required": ["drawingId", "path"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_export_all_drawings",
+            "Export all drawings",
+            "Exports every drawing sheet to a directory as PDF, DXF, DWG, or XPS files.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "directory": { "type": "string", "description": "Destination directory." },
+                "format": { "type": "string", "description": "Optional format: pdf, dxf, dwg, or xps. Default pdf." },
+                "cadVersion": { "type": "string", "description": "Optional AutoCAD version for DXF/DWG. Default v2018." }
+              },
+              "required": ["directory"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_list_drawing_resources",
+            "List drawing resources",
+            "Lists page formats, layout styles, scales, and legend styles available for drawings.",
+            """
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
             "renga_save_project",
             "Save the Renga project",
             "Saves the current project to the specified .rnp path. The .rnp extension is appended if missing.",

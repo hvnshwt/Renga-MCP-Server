@@ -29,6 +29,16 @@ public static class RengaIds
     public static readonly Guid IsolatedFoundation = new("6063816c-89ff-4c8f-a814-3be6cb94128e");
     public static readonly Guid Element = new("e1e3bd66-2e13-4fa4-a9eb-677e03067c2f");
     public static readonly Guid Line3D = new("02bbebe8-e28b-4ee5-8916-11b514a35dca");
+    public static readonly Guid Drawing = new("a7dfe1e1-bf2c-4c4a-ba74-3f156b1bbf8f");
+    public static readonly Guid DrawingLine = new("681cabaf-4469-438e-83d7-1efd664eda6b");
+    public static readonly Guid DrawingText = new("688cce66-411f-44a2-a5cc-149bdde3169c");
+    public static readonly Guid DrawingImage = new("478b4ee8-a87c-4560-ba64-0b33791eddbf");
+    public static readonly Guid LinearDimension = new("dc82ca1a-a0c3-4a1a-aefb-a7d720dd3a09");
+    public static readonly Guid Tag = new("b5ff6d07-84a7-432f-be96-73f5b95d54f3");
+    public static readonly Guid Elevation = new("8a49a9a8-a401-4ab1-8038-92093503c97a");
+    public static readonly Guid Section = new("4166fd59-64c0-45ee-ae3b-49fae1257ef1");
+    public static readonly Guid Table = new("ed1f87a1-5c9c-4994-969d-6d3854571193");
+    public static readonly Guid Schedule = new("5cbf0016-32bc-4630-99ea-c7cc94dda8e3");
 }
 
 public static class RengaParams
