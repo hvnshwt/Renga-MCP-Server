@@ -276,6 +276,209 @@ public static class ToolCatalog
             }
             """),
         new ToolSpec(
+            "renga_create_opening",
+            "Create an opening",
+            "Creates an opening (проём) in a floor or roof slab from a closed polygon or rectangle. Openings are hosted by floors and roofs; wall apertures use doors or windows. Points and depth are in meters.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "hostId": { "type": "integer", "description": "Local ID of the host floor or roof." },
+                "points": {
+                  "type": "array",
+                  "description": "Closed or open polygon of at least 3 points in meters.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "x": { "type": "number" },
+                      "y": { "type": "number" }
+                    },
+                    "required": ["x", "y"],
+                    "additionalProperties": false
+                  }
+                },
+                "x1": { "type": "number", "description": "Rectangle corner 1 X in meters." },
+                "y1": { "type": "number", "description": "Rectangle corner 1 Y in meters." },
+                "x2": { "type": "number", "description": "Rectangle corner 2 X in meters." },
+                "y2": { "type": "number", "description": "Rectangle corner 2 Y in meters." },
+                "depth": { "type": "number", "description": "Optional opening depth in meters. Uses the host thickness when omitted." },
+                "offset": { "type": "number", "description": "Optional vertical offset from the host in meters. Default 0." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["hostId"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_plate",
+            "Create a plate",
+            "Creates a native Renga Plate (пластина) at X/Y on a level. This is a profile-based plate, not a floor slab. Thickness and elevation are in meters.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "x": { "type": "number", "description": "Insert X in meters." },
+                "y": { "type": "number", "description": "Insert Y in meters." },
+                "thickness": { "type": "number", "description": "Optional plate thickness in meters." },
+                "elevation": { "type": "number", "description": "Optional absolute base elevation in meters." },
+                "styleId": { "type": "integer", "description": "Optional plate style ID. Use renga_list_styles with kind 'plate'." },
+                "materialId": { "type": "integer", "description": "Optional material ID." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["levelId", "x", "y"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_wall_foundation",
+            "Create a wall foundation",
+            "Creates a strip (wall) foundation along a straight baseline on a level. Coordinates, thickness, and height are in meters.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "x1": { "type": "number", "description": "Baseline start X in meters." },
+                "y1": { "type": "number", "description": "Baseline start Y in meters." },
+                "x2": { "type": "number", "description": "Baseline end X in meters." },
+                "y2": { "type": "number", "description": "Baseline end Y in meters." },
+                "thickness": { "type": "number", "description": "Foundation thickness in meters." },
+                "height": { "type": "number", "description": "Foundation height in meters." },
+                "offset": { "type": "number", "description": "Optional vertical offset from the level in meters. Default 0." },
+                "shape": { "type": "string", "description": "Optional shape: rectangular or trapezoid. Default rectangular." },
+                "thicknessTop": { "type": "number", "description": "Optional top thickness in meters for trapezoid shape." },
+                "position": { "type": "string", "description": "Optional position relative to the baseline: right, center, or left. Default center." },
+                "horizontalOffset": { "type": "number", "description": "Optional horizontal offset in meters. Default 0." },
+                "materialId": { "type": "integer", "description": "Optional material ID." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["levelId", "x1", "y1", "x2", "y2", "thickness", "height"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_isolated_foundation",
+            "Create an isolated foundation",
+            "Creates an isolated (column) foundation at X/Y on a level. Dimensions are in meters. Shape can be rectangular or trapezoid.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "x": { "type": "number", "description": "Foundation center X in meters." },
+                "y": { "type": "number", "description": "Foundation center Y in meters." },
+                "width": { "type": "number", "description": "Bottom width in meters." },
+                "depth": { "type": "number", "description": "Bottom depth in meters." },
+                "height": { "type": "number", "description": "Foundation height in meters." },
+                "elevation": { "type": "number", "description": "Optional absolute base elevation in meters." },
+                "shape": { "type": "string", "description": "Optional shape: rectangular or trapezoid. Default rectangular." },
+                "widthTop": { "type": "number", "description": "Optional top width in meters for trapezoid shape." },
+                "depthTop": { "type": "number", "description": "Optional top depth in meters for trapezoid shape." },
+                "rotation": { "type": "number", "description": "Optional rotation angle in degrees." },
+                "materialId": { "type": "integer", "description": "Optional material ID." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["levelId", "x", "y", "width", "depth", "height"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_room",
+            "Create a room",
+            "Creates a native room at a control point on a level. The room region is computed from the surrounding walls. Coordinates, height, and offset are in meters.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "x": { "type": "number", "description": "Control point X in meters." },
+                "y": { "type": "number", "description": "Control point Y in meters." },
+                "name": { "type": "string", "description": "Optional room name." },
+                "number": { "type": "string", "description": "Optional room number." },
+                "height": { "type": "number", "description": "Optional room height in meters." },
+                "offset": { "type": "number", "description": "Optional vertical offset from the level in meters. Default 0." }
+              },
+              "required": ["levelId", "x", "y"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_stair",
+            "Create a stair",
+            "Creates a stair along a straight baseline on a level. Coordinates, width, height, and thickness are in meters.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "x1": { "type": "number", "description": "Baseline start X in meters." },
+                "y1": { "type": "number", "description": "Baseline start Y in meters." },
+                "x2": { "type": "number", "description": "Baseline end X in meters." },
+                "y2": { "type": "number", "description": "Baseline end Y in meters." },
+                "width": { "type": "number", "description": "Stair width in meters." },
+                "height": { "type": "number", "description": "Stair height in meters." },
+                "thickness": { "type": "number", "description": "Optional stair thickness in meters." },
+                "numberOfSteps": { "type": "integer", "description": "Optional number of steps." },
+                "shape": { "type": "string", "description": "Optional shape: contour, thickened, solid, or open." },
+                "position": { "type": "string", "description": "Optional position relative to the baseline: right, center, or left. Default center." },
+                "horizontalOffset": { "type": "number", "description": "Optional horizontal offset in meters. Default 0." },
+                "offset": { "type": "number", "description": "Optional vertical offset from the level in meters. Default 0." },
+                "materialId": { "type": "integer", "description": "Optional material ID." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["levelId", "x1", "y1", "x2", "y2", "width", "height"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_railing",
+            "Create a railing",
+            "Creates a railing along a straight baseline on a level. Coordinates, height, and spacing are in meters. Renga keeps a straight baseline for railings.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "x1": { "type": "number", "description": "Baseline start X in meters." },
+                "y1": { "type": "number", "description": "Baseline start Y in meters." },
+                "x2": { "type": "number", "description": "Baseline end X in meters." },
+                "y2": { "type": "number", "description": "Baseline end Y in meters." },
+                "height": { "type": "number", "description": "Railing height in meters." },
+                "spaceBetweenBalusters": { "type": "number", "description": "Optional space between balusters in meters." },
+                "offset": { "type": "number", "description": "Optional vertical offset from the level in meters. Default 0." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["levelId", "x1", "y1", "x2", "y2", "height"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_ramp",
+            "Create a ramp",
+            "Creates a ramp along a straight baseline on a level. Coordinates, width, and height are in meters.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Local ID of the host level." },
+                "x1": { "type": "number", "description": "Baseline start X in meters." },
+                "y1": { "type": "number", "description": "Baseline start Y in meters." },
+                "x2": { "type": "number", "description": "Baseline end X in meters." },
+                "y2": { "type": "number", "description": "Baseline end Y in meters." },
+                "width": { "type": "number", "description": "Ramp width in meters." },
+                "height": { "type": "number", "description": "Ramp height in meters." },
+                "position": { "type": "string", "description": "Optional position relative to the baseline: right, center, or left. Default center." },
+                "horizontalOffset": { "type": "number", "description": "Optional horizontal offset in meters. Default 0." },
+                "offset": { "type": "number", "description": "Optional vertical offset from the level in meters. Default 0." },
+                "materialId": { "type": "integer", "description": "Optional material ID." },
+                "mark": { "type": "string", "description": "Optional mark." }
+              },
+              "required": ["levelId", "x1", "y1", "x2", "y2", "width", "height"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
             "renga_list_objects",
             "List model objects",
             "Lists model objects with local IDs, unique IDs, types, names, and host level IDs. Optionally filters by type name or type GUID.",

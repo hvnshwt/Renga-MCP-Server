@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Renga;
@@ -9,7 +9,7 @@ public sealed class RengaModelService
 {
     private readonly RengaConnector _connector;
     private SeedState _state = new();
-    private Guid _stateModelId = Guid.Empty;
+    private Guid _stateProjectId = Guid.Empty;
 
     public RengaModelService(RengaConnector connector)
     {
@@ -35,7 +35,7 @@ public sealed class RengaModelService
 
         var project = app.Project;
         var model = project.Model;
-        EnsureState(model);
+        EnsureState(project, model);
 
         result["project"] = DescribeProject(project, model);
         result["levels"] = ReadLevels(model).Select(ToDictionary).ToArray();
@@ -55,10 +55,10 @@ public sealed class RengaModelService
     public object NewProject()
     {
         _connector.NewProject();
-        _stateModelId = Guid.Empty;
+        _stateProjectId = Guid.Empty;
         var project = _connector.RequireProject();
         var model = project.Model;
-        EnsureState(model);
+        EnsureState(project, model);
         _state.FreshDefault = _state.Levels.Count == 1 && !HasGeometry(model);
 
         return new Dictionary<string, object?>
@@ -95,10 +95,10 @@ public sealed class RengaModelService
             throw new RengaException("OpenProject returned without an open project.");
         }
 
-        _stateModelId = Guid.Empty;
+        _stateProjectId = Guid.Empty;
         var project = app.Project;
         var model = project.Model;
-        EnsureState(model);
+        EnsureState(project, model);
 
         return new Dictionary<string, object?>
         {
@@ -116,7 +116,7 @@ public sealed class RengaModelService
 
         var project = _connector.RequireProject();
         var model = project.Model;
-        EnsureState(model);
+        EnsureState(project, model);
 
         if (HasGeometry(model))
         {
@@ -188,7 +188,7 @@ public sealed class RengaModelService
 
         var project = _connector.RequireProject();
         var model = project.Model;
-        EnsureState(model);
+        EnsureState(project, model);
 
         if (HasGeometry(model))
         {
@@ -887,6 +887,865 @@ public sealed class RengaModelService
                     .Select(point => new { x = Units.ToMeters(point.X), y = Units.ToMeters(point.Y) })
                     .ToArray(),
                 ["area"] = PolygonArea(polygon) / 1_000_000.0
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object CreateOpening(
+        int hostId,
+        IReadOnlyList<(double X, double Y)>? points,
+        double? x1,
+        double? y1,
+        double? x2,
+        double? y2,
+        double? depthMeters,
+        double? offsetMeters,
+        string? mark)
+    {
+        var polygon = ResolvePlanContour(points, x1, y1, x2, y2, "an opening");
+        var depthMm = depthMeters is double requestedDepth
+            ? Units.ToMillimeters(RequireFinite(requestedDepth, "depth"))
+            : (double?)null;
+        var offsetMm = offsetMeters is double requestedOffset
+            ? Units.ToMillimeters(RequireFinite(requestedOffset, "offset"))
+            : (double?)null;
+        if (depthMm is double depth && depth <= 0)
+        {
+            throw new RengaException("Opening depth must be positive.");
+        }
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var host = FindObject(model, hostId)
+            ?? throw new RengaException($"Host object with ID {hostId} was not found.");
+        if (host.ObjectType != RengaIds.Floor && host.ObjectType != RengaIds.Roof)
+        {
+            throw new RengaException(
+                $"Openings can be hosted on floors and roofs, not on {TypeName(host.ObjectType)}. " +
+                "For wall apertures use renga_create_door or renga_create_window.");
+        }
+
+        var center = BoundingBoxCenter(polygon);
+        var localPolygon = polygon
+            .Select(point => (X: point.X - center.X, Y: point.Y - center.Y))
+            .ToList();
+
+        var hostElevationMm = 0.0;
+        if (host is ILevelObject hostLevelObject &&
+            FindLevel(model, hostLevelObject.LevelId) is ILevel hostLevel)
+        {
+            hostElevationMm = hostLevel.Elevation + hostLevelObject.ElevationAboveLevel;
+        }
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = model.CreateNewEntityArgs();
+            args.TypeId = RengaIds.Opening;
+            args.HostObjectId = hostId;
+            args.Placement3D = new Placement3D
+            {
+                Origin = new Point3D { X = center.X, Y = center.Y, Z = hostElevationMm },
+                xAxis = new Vector3D { X = 1, Y = 0, Z = 0 },
+                zAxis = new Vector3D { X = 0, Y = 0, Z = 1 }
+            };
+
+            var opening = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the opening. " + _connector.LastError);
+            if (opening is not IBaseline2DObject baseline)
+            {
+                throw new RengaException("The created opening does not expose IBaseline2DObject.");
+            }
+
+            baseline.SetBaseline(CreateClosedPolygon(localPolygon));
+            if (depthMm is double openingDepth)
+            {
+                SetDoubleParameterByName(opening, "OpeningDepth", openingDepth);
+            }
+
+            if (offsetMm is double verticalOffset)
+            {
+                SetDoubleParameterByName(opening, "Offset", verticalOffset);
+            }
+
+            if (!string.IsNullOrWhiteSpace(mark))
+            {
+                SetStringParameterByName(opening, "Mark", mark.Trim());
+            }
+
+            op.Apply();
+            applied = true;
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = opening.Id,
+                ["uniqueId"] = opening.UniqueIdS,
+                ["type"] = opening.ObjectTypeS,
+                ["hostId"] = hostId,
+                ["hostType"] = TypeName(host.ObjectType),
+                ["depth"] = depthMeters,
+                ["offset"] = offsetMeters,
+                ["area"] = PolygonArea(polygon) / 1_000_000.0,
+                ["perimeter"] = Units.ToMeters(Perimeter(polygon))
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object CreatePlate(
+        int levelId,
+        double x,
+        double y,
+        double? thicknessMeters,
+        double? elevationMeters,
+        int? styleId,
+        int? materialId,
+        string? mark)
+    {
+        var px = Units.ToMillimeters(RequireFinite(x, "x"));
+        var py = Units.ToMillimeters(RequireFinite(y, "y"));
+        var thicknessMm = thicknessMeters is double requestedThickness
+            ? Units.ToMillimeters(RequireFinite(requestedThickness, "thickness"))
+            : (double?)null;
+        if (thicknessMm is double thickness && thickness <= 0)
+        {
+            throw new RengaException("Plate thickness must be positive.");
+        }
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var level = ResolveLevel(model, levelId, elevationMeters);
+        var localZ = elevationMeters is double elevation
+            ? Units.ToMillimeters(elevation) - level.ElevationMm
+            : 0;
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = model.CreateNewEntityArgs();
+            args.TypeId = RengaIds.Plate;
+            args.HostObjectId = level.Id;
+            args.Placement3D = new Placement3D
+            {
+                Origin = new Point3D { X = px, Y = py, Z = localZ },
+                xAxis = new Vector3D { X = 1, Y = 0, Z = 0 },
+                zAxis = new Vector3D { X = 0, Y = 0, Z = 1 }
+            };
+
+            var resolvedStyleId = styleId is int requestedStyle && requestedStyle > 0
+                ? requestedStyle
+                : 0;
+            if (resolvedStyleId > 0)
+            {
+                args.StyleId = resolvedStyleId;
+            }
+
+            var plate = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the plate. " + _connector.LastError);
+
+            if (thicknessMm is double plateThickness)
+            {
+                SetDoubleParameterByName(plate, "PlateThickness", plateThickness);
+            }
+
+            if (!string.IsNullOrWhiteSpace(mark))
+            {
+                SetStringParameterByName(plate, "Mark", mark.Trim());
+            }
+
+            op.Apply();
+            applied = true;
+
+            ApplyLateParameters(project, plate, Array.Empty<(string, int)>(), Array.Empty<(string, double)>(), materialId);
+
+            var levelObject = plate as ILevelObject;
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = plate.Id,
+                ["uniqueId"] = plate.UniqueIdS,
+                ["type"] = plate.ObjectTypeS,
+                ["levelId"] = levelObject?.LevelId ?? level.Id,
+                ["levelName"] = level.Name,
+                ["x"] = x,
+                ["y"] = y,
+                ["elevationAboveLevel"] = Units.ToMeters(levelObject?.ElevationAboveLevel ?? localZ),
+                ["thickness"] = thicknessMeters,
+                ["styleId"] = resolvedStyleId,
+                ["materialId"] = materialId
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object CreateWallFoundation(
+        int levelId,
+        double x1,
+        double y1,
+        double x2,
+        double y2,
+        double thicknessMeters,
+        double heightMeters,
+        double? offsetMeters,
+        string? shape,
+        double? thicknessTopMeters,
+        string? position,
+        double? horizontalOffsetMeters,
+        int? materialId,
+        string? mark)
+    {
+        var sx = Units.ToMillimeters(RequireFinite(x1, "x1"));
+        var sy = Units.ToMillimeters(RequireFinite(y1, "y1"));
+        var ex = Units.ToMillimeters(RequireFinite(x2, "x2"));
+        var ey = Units.ToMillimeters(RequireFinite(y2, "y2"));
+        var thicknessMm = Units.ToMillimeters(RequireFinite(thicknessMeters, "thickness"));
+        var heightMm = Units.ToMillimeters(RequireFinite(heightMeters, "height"));
+        if (thicknessMm <= 0 || heightMm <= 0)
+        {
+            throw new RengaException("Wall foundation thickness and height must be positive.");
+        }
+
+        var offsetMm = Units.ToMillimeters(RequireFinite(offsetMeters ?? 0, "offset"));
+        var horizontalOffsetMm = Units.ToMillimeters(RequireFinite(horizontalOffsetMeters ?? 0, "horizontalOffset"));
+        var shapeValue = string.IsNullOrWhiteSpace(shape) ? (int?)null : ParseWallFoundationShape(shape);
+        var positionValue = string.IsNullOrWhiteSpace(position) ? (int?)null : ParsePosition(position);
+        var topMm = thicknessTopMeters is double requestedTop
+            ? Units.ToMillimeters(RequireFinite(requestedTop, "thicknessTop"))
+            : (double?)null;
+        if (topMm is not null && shapeValue is null)
+        {
+            shapeValue = 1;
+        }
+
+        if (shapeValue == 1 && topMm is null)
+        {
+            topMm = thicknessMm;
+        }
+
+        if (topMm is double top && top <= 0)
+        {
+            throw new RengaException("Wall foundation top thickness must be positive.");
+        }
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        ResolveLevel(model, levelId, null);
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = CreateBaselineArgs(model, RengaIds.WallFoundation, levelId, sx, sy, ex, ey, out var lengthMm);
+            var foundation = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the wall foundation. " + _connector.LastError);
+            if (foundation is not IBaseline2DObject baseline)
+            {
+                throw new RengaException("The created wall foundation does not expose IBaseline2DObject.");
+            }
+
+            baseline.SetBaseline(CreateLine2D(0, 0, lengthMm, 0));
+            SetDoubleParameterByName(foundation, "WallFoundationThickness", thicknessMm);
+            SetDoubleParameterByName(foundation, "WallFoundationHeight", heightMm);
+            SetDoubleParameterByName(foundation, "Offset", offsetMm);
+            SetDoubleParameterByName(foundation, "WallFoundationHorizontalOffset", horizontalOffsetMm);
+
+            if (!string.IsNullOrWhiteSpace(mark))
+            {
+                SetStringParameterByName(foundation, "Mark", mark.Trim());
+            }
+
+            op.Apply();
+            applied = true;
+
+            var lateInts = new List<(string, int)>();
+            if (shapeValue is int shapeCode)
+            {
+                lateInts.Add(("WallFoundationShape", shapeCode));
+            }
+
+            if (positionValue is int positionCode)
+            {
+                lateInts.Add(("WallFoundationPositionRelativeToBaseline", positionCode));
+            }
+
+            var lateDoubles = new List<(string, double)>();
+            if (topMm is double topThickness)
+            {
+                lateDoubles.Add(("WallFoundationThicknessTop", topThickness));
+            }
+
+            ApplyLateParameters(project, foundation, lateInts, lateDoubles, materialId);
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = foundation.Id,
+                ["uniqueId"] = foundation.UniqueIdS,
+                ["type"] = foundation.ObjectTypeS,
+                ["levelId"] = levelId,
+                ["length"] = Units.ToMeters(lengthMm),
+                ["thickness"] = thicknessMeters,
+                ["thicknessTop"] = topMm is double t ? Units.ToMeters(t) : null,
+                ["height"] = heightMeters,
+                ["shape"] = shape,
+                ["position"] = position,
+                ["materialId"] = materialId
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object CreateIsolatedFoundation(
+        int levelId,
+        double x,
+        double y,
+        double widthMeters,
+        double depthMeters,
+        double heightMeters,
+        double? elevationMeters,
+        string? shape,
+        double? widthTopMeters,
+        double? depthTopMeters,
+        double? rotationDegrees,
+        int? materialId,
+        string? mark)
+    {
+        var px = Units.ToMillimeters(RequireFinite(x, "x"));
+        var py = Units.ToMillimeters(RequireFinite(y, "y"));
+        var widthMm = Units.ToMillimeters(RequireFinite(widthMeters, "width"));
+        var depthMm = Units.ToMillimeters(RequireFinite(depthMeters, "depth"));
+        var heightMm = Units.ToMillimeters(RequireFinite(heightMeters, "height"));
+        if (widthMm <= 0 || depthMm <= 0 || heightMm <= 0)
+        {
+            throw new RengaException("Isolated foundation width, depth, and height must be positive.");
+        }
+
+        var shapeValue = string.IsNullOrWhiteSpace(shape) ? (int?)null : ParseWallFoundationShape(shape);
+        var widthTopMm = widthTopMeters is double requestedWidthTop
+            ? Units.ToMillimeters(RequireFinite(requestedWidthTop, "widthTop"))
+            : (double?)null;
+        var depthTopMm = depthTopMeters is double requestedDepthTop
+            ? Units.ToMillimeters(RequireFinite(requestedDepthTop, "depthTop"))
+            : (double?)null;
+        if ((widthTopMm is not null || depthTopMm is not null) && shapeValue is null)
+        {
+            shapeValue = 1;
+        }
+
+        if (shapeValue == 1)
+        {
+            widthTopMm ??= widthMm;
+            depthTopMm ??= depthMm;
+        }
+
+        var rotation = RequireFinite(rotationDegrees ?? 0, "rotation");
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var level = ResolveLevel(model, levelId, elevationMeters);
+        var localZ = elevationMeters is double elevation
+            ? Units.ToMillimeters(elevation) - level.ElevationMm
+            : 0;
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = model.CreateNewEntityArgs();
+            args.TypeId = RengaIds.IsolatedFoundation;
+            args.HostObjectId = level.Id;
+            args.Placement3D = new Placement3D
+            {
+                Origin = new Point3D { X = px, Y = py, Z = localZ },
+                xAxis = new Vector3D { X = 1, Y = 0, Z = 0 },
+                zAxis = new Vector3D { X = 0, Y = 0, Z = 1 }
+            };
+
+            var foundation = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the isolated foundation. " + _connector.LastError);
+
+            SetDoubleParameterByName(foundation, "IsolatedFoundationWidth", widthMm);
+            SetDoubleParameterByName(foundation, "IsolatedFoundationDepth", depthMm);
+            SetDoubleParameterByName(foundation, "IsolatedFoundationHeight", heightMm);
+            SetDoubleParameterByName(foundation, "IsolatedFoundationRotationAngle", rotation);
+            if (!string.IsNullOrWhiteSpace(mark))
+            {
+                SetStringParameterByName(foundation, "Mark", mark.Trim());
+            }
+
+            op.Apply();
+            applied = true;
+
+            var lateInts = new List<(string, int)>();
+            if (shapeValue is int shapeCode)
+            {
+                lateInts.Add(("IsolatedFoundationShape", shapeCode));
+            }
+
+            var lateDoubles = new List<(string, double)>();
+            if (widthTopMm is double topWidth)
+            {
+                lateDoubles.Add(("IsolatedFoundationWidthTop", topWidth));
+            }
+
+            if (depthTopMm is double topDepth)
+            {
+                lateDoubles.Add(("IsolatedFoundationDepthTop", topDepth));
+            }
+
+            ApplyLateParameters(project, foundation, lateInts, lateDoubles, materialId);
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = foundation.Id,
+                ["uniqueId"] = foundation.UniqueIdS,
+                ["type"] = foundation.ObjectTypeS,
+                ["levelId"] = level.Id,
+                ["levelName"] = level.Name,
+                ["x"] = x,
+                ["y"] = y,
+                ["width"] = widthMeters,
+                ["depth"] = depthMeters,
+                ["height"] = heightMeters,
+                ["widthTop"] = widthTopMm is double wt ? Units.ToMeters(wt) : null,
+                ["depthTop"] = depthTopMm is double dt ? Units.ToMeters(dt) : null,
+                ["rotation"] = rotation,
+                ["shape"] = shape,
+                ["materialId"] = materialId
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object CreateRoom(
+        int levelId,
+        double x,
+        double y,
+        string? name,
+        string? number,
+        double? heightMeters,
+        double? offsetMeters)
+    {
+        var px = Units.ToMillimeters(RequireFinite(x, "x"));
+        var py = Units.ToMillimeters(RequireFinite(y, "y"));
+        var heightMm = heightMeters is double requestedHeight
+            ? Units.ToMillimeters(RequireFinite(requestedHeight, "height"))
+            : (double?)null;
+        if (heightMm is double height && height <= 0)
+        {
+            throw new RengaException("Room height must be positive.");
+        }
+
+        var offsetMm = Units.ToMillimeters(RequireFinite(offsetMeters ?? 0, "offset"));
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var level = ResolveLevel(model, levelId, null);
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = model.CreateNewEntityArgs();
+            args.TypeId = RengaIds.Room;
+            args.HostObjectId = level.Id;
+            args.Placement3D = new Placement3D
+            {
+                Origin = new Point3D { X = px, Y = py, Z = 0 },
+                xAxis = new Vector3D { X = 1, Y = 0, Z = 0 },
+                zAxis = new Vector3D { X = 0, Y = 0, Z = 1 }
+            };
+
+            var room = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the room. " + _connector.LastError);
+
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                SetStringParameterByName(room, "RoomName", name.Trim());
+            }
+
+            if (!string.IsNullOrWhiteSpace(number))
+            {
+                SetStringParameterByName(room, "RoomNumber", number.Trim());
+            }
+
+            if (heightMm is double roomHeight)
+            {
+                SetDoubleParameterByName(room, "RoomHeight", roomHeight);
+            }
+
+            SetDoubleParameterByName(room, "Offset", offsetMm);
+
+            op.Apply();
+            applied = true;
+
+            var regionInfo = DescribeRoomRegion(room, px, py);
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = room.Id,
+                ["uniqueId"] = room.UniqueIdS,
+                ["type"] = room.ObjectTypeS,
+                ["levelId"] = level.Id,
+                ["levelName"] = level.Name,
+                ["x"] = x,
+                ["y"] = y,
+                ["name"] = name,
+                ["number"] = number,
+                ["height"] = heightMeters,
+                ["offset"] = offsetMeters,
+                ["regionContourCount"] = regionInfo.ContourCount,
+                ["regionOuterLength"] = regionInfo.OuterLength
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object CreateStair(
+        int levelId,
+        double x1,
+        double y1,
+        double x2,
+        double y2,
+        double widthMeters,
+        double heightMeters,
+        double? thicknessMeters,
+        int? numberOfSteps,
+        string? shape,
+        string? position,
+        double? horizontalOffsetMeters,
+        double? offsetMeters,
+        int? materialId,
+        string? mark)
+    {
+        var sx = Units.ToMillimeters(RequireFinite(x1, "x1"));
+        var sy = Units.ToMillimeters(RequireFinite(y1, "y1"));
+        var ex = Units.ToMillimeters(RequireFinite(x2, "x2"));
+        var ey = Units.ToMillimeters(RequireFinite(y2, "y2"));
+        var widthMm = Units.ToMillimeters(RequireFinite(widthMeters, "width"));
+        var heightMm = Units.ToMillimeters(RequireFinite(heightMeters, "height"));
+        if (widthMm <= 0 || heightMm <= 0)
+        {
+            throw new RengaException("Stair width and height must be positive.");
+        }
+
+        var thicknessMm = thicknessMeters is double requestedThickness
+            ? Units.ToMillimeters(RequireFinite(requestedThickness, "thickness"))
+            : (double?)null;
+        if (thicknessMm is double thickness && thickness <= 0)
+        {
+            throw new RengaException("Stair thickness must be positive.");
+        }
+
+        if (numberOfSteps is int steps && steps <= 0)
+        {
+            throw new RengaException("Number of steps must be positive.");
+        }
+
+        var shapeValue = string.IsNullOrWhiteSpace(shape) ? (int?)null : ParseStairShape(shape);
+        var positionValue = string.IsNullOrWhiteSpace(position) ? (int?)null : ParsePosition(position);
+        var horizontalOffsetMm = Units.ToMillimeters(RequireFinite(horizontalOffsetMeters ?? 0, "horizontalOffset"));
+        var offsetMm = Units.ToMillimeters(RequireFinite(offsetMeters ?? 0, "offset"));
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        ResolveLevel(model, levelId, null);
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = CreateBaselineArgs(model, RengaIds.Stair, levelId, sx, sy, ex, ey, out var lengthMm);
+            var stair = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the stair. " + _connector.LastError);
+            if (stair is not IBaseline2DObject baseline)
+            {
+                throw new RengaException("The created stair does not expose IBaseline2DObject.");
+            }
+
+            baseline.SetBaseline(CreateLine2D(0, 0, lengthMm, 0));
+            SetDoubleParameterByName(stair, "StairWidth", widthMm);
+            SetDoubleParameterByName(stair, "StairHeight", heightMm);
+            SetDoubleParameterByName(stair, "StairHorizontalOffset", horizontalOffsetMm);
+            SetDoubleParameterByName(stair, "Offset", offsetMm);
+            if (thicknessMm is double stairThickness)
+            {
+                SetDoubleParameterByName(stair, "StairThickness", stairThickness);
+            }
+
+            if (!string.IsNullOrWhiteSpace(mark))
+            {
+                SetStringParameterByName(stair, "Mark", mark.Trim());
+            }
+
+            op.Apply();
+            applied = true;
+
+            var lateInts = new List<(string, int)>();
+            if (numberOfSteps is int stepCount)
+            {
+                lateInts.Add(("NumberOfSteps", stepCount));
+            }
+
+            if (shapeValue is int shapeCode)
+            {
+                lateInts.Add(("StairShape", shapeCode));
+            }
+
+            if (positionValue is int positionCode)
+            {
+                lateInts.Add(("StairPositionRelativeToBaseline", positionCode));
+            }
+
+            ApplyLateParameters(project, stair, lateInts, Array.Empty<(string, double)>(), materialId);
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = stair.Id,
+                ["uniqueId"] = stair.UniqueIdS,
+                ["type"] = stair.ObjectTypeS,
+                ["levelId"] = levelId,
+                ["length"] = Units.ToMeters(lengthMm),
+                ["width"] = widthMeters,
+                ["height"] = heightMeters,
+                ["thickness"] = thicknessMeters,
+                ["numberOfSteps"] = numberOfSteps,
+                ["shape"] = shape,
+                ["position"] = position,
+                ["materialId"] = materialId
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object CreateRailing(
+        int levelId,
+        double x1,
+        double y1,
+        double x2,
+        double y2,
+        double heightMeters,
+        double? spaceBetweenBalustersMeters,
+        double? offsetMeters,
+        string? mark)
+    {
+        var sx = Units.ToMillimeters(RequireFinite(x1, "x1"));
+        var sy = Units.ToMillimeters(RequireFinite(y1, "y1"));
+        var ex = Units.ToMillimeters(RequireFinite(x2, "x2"));
+        var ey = Units.ToMillimeters(RequireFinite(y2, "y2"));
+        var heightMm = Units.ToMillimeters(RequireFinite(heightMeters, "height"));
+        if (heightMm <= 0)
+        {
+            throw new RengaException("Railing height must be positive.");
+        }
+
+        var spaceMm = spaceBetweenBalustersMeters is double requestedSpace
+            ? Units.ToMillimeters(RequireFinite(requestedSpace, "spaceBetweenBalusters"))
+            : (double?)null;
+        if (spaceMm is double space && space <= 0)
+        {
+            throw new RengaException("Space between balusters must be positive.");
+        }
+
+        var offsetMm = Units.ToMillimeters(RequireFinite(offsetMeters ?? 0, "offset"));
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        ResolveLevel(model, levelId, null);
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = CreateBaselineArgs(model, RengaIds.Railing, levelId, sx, sy, ex, ey, out var lengthMm);
+            var railing = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the railing. " + _connector.LastError);
+            if (railing is not IBaseline2DObject baseline)
+            {
+                throw new RengaException("The created railing does not expose IBaseline2DObject.");
+            }
+
+            baseline.SetBaseline(CreateLine2D(0, 0, lengthMm, 0));
+            SetDoubleParameterByName(railing, "RailingHeight", heightMm);
+            SetDoubleParameterByName(railing, "Offset", offsetMm);
+            if (spaceMm is double balusterSpace)
+            {
+                SetDoubleParameterByName(railing, "SpaceBetweenBalusters", balusterSpace);
+            }
+
+            if (!string.IsNullOrWhiteSpace(mark))
+            {
+                SetStringParameterByName(railing, "Mark", mark.Trim());
+            }
+
+            op.Apply();
+            applied = true;
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = railing.Id,
+                ["uniqueId"] = railing.UniqueIdS,
+                ["type"] = railing.ObjectTypeS,
+                ["levelId"] = levelId,
+                ["length"] = Units.ToMeters(lengthMm),
+                ["height"] = heightMeters,
+                ["spaceBetweenBalusters"] = spaceBetweenBalustersMeters,
+                ["offset"] = offsetMeters
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+    }
+
+    public object CreateRamp(
+        int levelId,
+        double x1,
+        double y1,
+        double x2,
+        double y2,
+        double widthMeters,
+        double heightMeters,
+        string? position,
+        double? horizontalOffsetMeters,
+        double? offsetMeters,
+        int? materialId,
+        string? mark)
+    {
+        var sx = Units.ToMillimeters(RequireFinite(x1, "x1"));
+        var sy = Units.ToMillimeters(RequireFinite(y1, "y1"));
+        var ex = Units.ToMillimeters(RequireFinite(x2, "x2"));
+        var ey = Units.ToMillimeters(RequireFinite(y2, "y2"));
+        var widthMm = Units.ToMillimeters(RequireFinite(widthMeters, "width"));
+        var heightMm = Units.ToMillimeters(RequireFinite(heightMeters, "height"));
+        if (widthMm <= 0 || heightMm <= 0)
+        {
+            throw new RengaException("Ramp width and height must be positive.");
+        }
+
+        var positionValue = string.IsNullOrWhiteSpace(position) ? (int?)null : ParsePosition(position);
+        var horizontalOffsetMm = Units.ToMillimeters(RequireFinite(horizontalOffsetMeters ?? 0, "horizontalOffset"));
+        var offsetMm = Units.ToMillimeters(RequireFinite(offsetMeters ?? 0, "offset"));
+
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        ResolveLevel(model, levelId, null);
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = CreateBaselineArgs(model, RengaIds.Ramp, levelId, sx, sy, ex, ey, out var lengthMm);
+            var ramp = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the ramp. " + _connector.LastError);
+            if (ramp is not IBaseline2DObject baseline)
+            {
+                throw new RengaException("The created ramp does not expose IBaseline2DObject.");
+            }
+
+            baseline.SetBaseline(CreateLine2D(0, 0, lengthMm, 0));
+            SetDoubleParameterByName(ramp, "RampWidth", widthMm);
+            SetDoubleParameterByName(ramp, "RampHeight", heightMm);
+            SetDoubleParameterByName(ramp, "RampHorizontalOffset", horizontalOffsetMm);
+            SetDoubleParameterByName(ramp, "Offset", offsetMm);
+            if (!string.IsNullOrWhiteSpace(mark))
+            {
+                SetStringParameterByName(ramp, "Mark", mark.Trim());
+            }
+
+            op.Apply();
+            applied = true;
+
+            var lateInts = new List<(string, int)>();
+            if (positionValue is int positionCode)
+            {
+                lateInts.Add(("RampPositionRelativeToBaseline", positionCode));
+            }
+
+            ApplyLateParameters(project, ramp, lateInts, Array.Empty<(string, double)>(), materialId);
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = ramp.Id,
+                ["uniqueId"] = ramp.UniqueIdS,
+                ["type"] = ramp.ObjectTypeS,
+                ["levelId"] = levelId,
+                ["length"] = Units.ToMeters(lengthMm),
+                ["width"] = widthMeters,
+                ["height"] = heightMeters,
+                ["position"] = position,
+                ["materialId"] = materialId
             };
         }
         catch
@@ -1740,7 +2599,7 @@ public sealed class RengaModelService
             _state.Managed = true;
             _state.FreshDefault = false;
             _state.AxesLocked = false;
-            _stateModelId = importedModel.Id;
+            _stateProjectId = GetProjectStateId(importedProject, importedModel);
             app.Visible = _connector.Visible;
 
             return new Dictionary<string, object?>
@@ -1843,15 +2702,15 @@ public sealed class RengaModelService
         }
     }
 
-    private void EnsureState(IModel model)
+    private void EnsureState(IProject project, IModel model)
     {
-        var modelId = model.Id;
-        if (_stateModelId == modelId)
+        var projectId = GetProjectStateId(project, model);
+        if (_stateProjectId == projectId)
         {
             return;
         }
 
-        _stateModelId = modelId;
+        _stateProjectId = projectId;
         _state = new SeedState();
 
         var levels = ReadLevels(model);
@@ -1861,6 +2720,24 @@ public sealed class RengaModelService
         _state.AxesLocked = axes.Count > 0;
         _state.Managed = false;
         _state.FreshDefault = false;
+    }
+
+    private static Guid GetProjectStateId(IProject project, IModel model)
+    {
+        try
+        {
+            var id = project.ProjectInfo.UniqueId;
+            if (id != Guid.Empty)
+            {
+                return id;
+            }
+        }
+        catch
+        {
+            // ignored
+        }
+
+        return model.Id;
     }
 
     private static IOperation StartOperation(IProject project)
@@ -2070,6 +2947,242 @@ public sealed class RengaModelService
 
         return false;
     }
+
+    private static INewEntityArgs CreateBaselineArgs(
+        IModel model,
+        Guid typeId,
+        int levelId,
+        double x1,
+        double y1,
+        double x2,
+        double y2,
+        out double lengthMm)
+    {
+        var dx = x2 - x1;
+        var dy = y2 - y1;
+        var length = Math.Sqrt(dx * dx + dy * dy);
+        if (length < 1e-6)
+        {
+            throw new RengaException("Start and end points must be different.");
+        }
+
+        lengthMm = length;
+        var args = model.CreateNewEntityArgs();
+        args.TypeId = typeId;
+        args.HostObjectId = levelId;
+        args.Placement3D = new Placement3D
+        {
+            Origin = new Point3D { X = x1, Y = y1, Z = 0 },
+            xAxis = new Vector3D { X = dx / length, Y = dy / length, Z = 0 },
+            zAxis = new Vector3D { X = 0, Y = 0, Z = 1 }
+        };
+
+        return args;
+    }
+
+    private static List<(double X, double Y)> ResolvePlanContour(
+        IReadOnlyList<(double X, double Y)>? points,
+        double? x1,
+        double? y1,
+        double? x2,
+        double? y2,
+        string label)
+    {
+        IReadOnlyList<(double X, double Y)> contour;
+        if (points is { Count: >= 3 })
+        {
+            contour = points;
+        }
+        else if (x1 is double rx1 && y1 is double ry1 && x2 is double rx2 && y2 is double ry2)
+        {
+            contour = new[]
+            {
+                (rx1, ry1),
+                (rx2, ry1),
+                (rx2, ry2),
+                (rx1, ry2)
+            };
+        }
+        else
+        {
+            throw new RengaException(
+                $"Provide either a points array with at least 3 points or x1, y1, x2, y2 for {label}.");
+        }
+
+        var polygon = contour
+            .Select(point => (
+                X: Units.ToMillimeters(RequireFinite(point.X, "point.x")),
+                Y: Units.ToMillimeters(RequireFinite(point.Y, "point.y"))))
+            .ToList();
+
+        if (polygon.Count > 1 &&
+            Math.Abs(polygon[0].X - polygon[^1].X) < 1e-6 &&
+            Math.Abs(polygon[0].Y - polygon[^1].Y) < 1e-6)
+        {
+            polygon.RemoveAt(polygon.Count - 1);
+        }
+
+        if (polygon.Count < 3 ||
+            polygon.Select(point => (point.X, point.Y)).Distinct().Count() < 3)
+        {
+            throw new RengaException($"The contour for {label} requires at least 3 distinct points.");
+        }
+
+        return polygon;
+    }
+
+    private static (double X, double Y) BoundingBoxCenter(IReadOnlyList<(double X, double Y)> polygon)
+    {
+        var minX = polygon.Min(point => point.X);
+        var maxX = polygon.Max(point => point.X);
+        var minY = polygon.Min(point => point.Y);
+        var maxY = polygon.Max(point => point.Y);
+        return ((minX + maxX) / 2.0, (minY + maxY) / 2.0);
+    }
+
+    private static double Perimeter(IReadOnlyList<(double X, double Y)> polygon)
+    {
+        double length = 0;
+        for (var i = 0; i < polygon.Count; i++)
+        {
+            var start = polygon[i];
+            var end = polygon[(i + 1) % polygon.Count];
+            var dx = end.X - start.X;
+            var dy = end.Y - start.Y;
+            length += Math.Sqrt(dx * dx + dy * dy);
+        }
+
+        return length;
+    }
+
+    private static void SetDoubleParameterByName(IModelObject obj, string parameterName, double value)
+    {
+        var container = obj.GetParameters();
+        var parameter = FindParameter(container, parameterName)
+            ?? throw new RengaException(
+                $"Parameter '{parameterName}' is not available on {obj.ObjectTypeS}.");
+        if (parameter.IsReadOnly)
+        {
+            throw new RengaException($"Parameter '{parameterName}' is read-only.");
+        }
+
+        parameter.SetDoubleValue(value);
+    }
+
+    private static void SetStringParameterByName(IModelObject obj, string parameterName, string value)
+    {
+        var container = obj.GetParameters();
+        var parameter = FindParameter(container, parameterName)
+            ?? throw new RengaException(
+                $"Parameter '{parameterName}' is not available on {obj.ObjectTypeS}.");
+        if (parameter.IsReadOnly)
+        {
+            throw new RengaException($"Parameter '{parameterName}' is read-only.");
+        }
+
+        parameter.SetStringValue(value);
+    }
+
+    private static void ApplyLateParameters(
+        IProject project,
+        IModelObject obj,
+        IReadOnlyList<(string Name, int Value)> intParameters,
+        IReadOnlyList<(string Name, double Value)> doubleParameters,
+        int? materialId)
+    {
+        if (intParameters.Count == 0 && doubleParameters.Count == 0 && materialId is null)
+        {
+            return;
+        }
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var container = obj.GetParameters();
+            foreach (var (name, value) in intParameters)
+            {
+                var parameter = FindParameter(container, name)
+                    ?? throw new RengaException($"Parameter '{name}' is not available on {obj.ObjectTypeS}.");
+                parameter.SetIntValue(value);
+            }
+
+            foreach (var (name, value) in doubleParameters)
+            {
+                var parameter = FindParameter(container, name)
+                    ?? throw new RengaException($"Parameter '{name}' is not available on {obj.ObjectTypeS}.");
+                parameter.SetDoubleValue(value);
+            }
+
+            if (materialId is int material)
+            {
+                var parameter = FindParameter(container, "MaterialId")
+                    ?? throw new RengaException($"{obj.ObjectTypeS} does not expose MaterialId.");
+                parameter.SetIntValue(material);
+            }
+
+            op.Apply();
+            applied = true;
+        }
+        catch (Exception ex)
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw new RengaException(
+                $"Object {obj.Id} was created, but additional parameters could not be applied: {ex.Message}",
+                ex);
+        }
+    }
+
+    private static (int ContourCount, double OuterLength) DescribeRoomRegion(
+        IModelObject obj,
+        double xMm,
+        double yMm)
+    {
+        try
+        {
+            var room = obj.GetInterfaceByName("IRoom") as IRoom;
+            var region = room?.CalculateRegion(new Point2D { X = xMm, Y = yMm })?.Region;
+            if (region is null)
+            {
+                return (0, 0);
+            }
+
+            var outer = region.GetOuterContour();
+            return (region.GetContourCount(), Units.ToMeters(outer?.GetLength() ?? 0));
+        }
+        catch
+        {
+            return (0, 0);
+        }
+    }
+
+    private static int ParseWallFoundationShape(string shape) => shape.Trim().ToLowerInvariant() switch
+    {
+        "rectangular" or "rectangle" or "прямоугольный" => 0,
+        "trapezoid" or "trapezoidal" or "трапециевидный" => 1,
+        _ => throw new RengaException("Foundation shape must be rectangular or trapezoid.")
+    };
+
+    private static int ParseStairShape(string shape) => shape.Trim().ToLowerInvariant() switch
+    {
+        "contour" or "контурная" => 0,
+        "thickened" or "утолщённая" or "утолщенная" => 1,
+        "solid" or "сплошная" => 2,
+        "open" or "открытая" => 3,
+        _ => throw new RengaException("Stair shape must be contour, thickened, solid, or open.")
+    };
+
+    private static int ParsePosition(string position) => position.Trim().ToLowerInvariant() switch
+    {
+        "right" or "справа" => 0,
+        "center" or "centre" or "по центру" => 1,
+        "left" or "слева" => 2,
+        _ => throw new RengaException("Position must be right, center, or left.")
+    };
 
     private static bool IsLevel(IModelObject obj) => obj.ObjectType == RengaIds.Level;
 
