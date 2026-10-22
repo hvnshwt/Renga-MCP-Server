@@ -618,6 +618,12 @@ public sealed class McpServer
             RequireInt(args, "objectId"),
             RequireDouble(args, "angle"),
             OptionalString(args, "axis")),
+        "renga_set_object_placement" => _service.SetObjectPlacement(
+            RequireInt(args, "objectId"),
+            RequireDouble(args, "x"),
+            RequireDouble(args, "y"),
+            RequireDouble(args, "z"),
+            OptionalDouble(args, "rotation")),
         "renga_list_known_quantities" => _service.ListKnownQuantities(),
         "renga_get_quantity" => _service.GetQuantity(
             RequireInt(args, "objectId"),
@@ -626,10 +632,15 @@ public sealed class McpServer
         "renga_get_quantities" => _service.GetQuantities(
             RequireInt(args, "objectId"),
             OptionalStringArray(args, "quantities")),
+        "renga_get_quantities_batch" => _service.GetQuantitiesBatch(
+            OptionalIntArray(args, "objectIds")
+                ?? throw new RengaException("Parameter 'objectIds' is required and must be an array of integers."),
+            OptionalStringArray(args, "quantities")),
         "renga_import_ifc" => _service.ImportIfc(
             RequireString(args, "path"),
             OptionalBool(args, "confirm") ?? false),
         "renga_list_ifc_links" => _service.ListIfcLinks(OptionalInt(args, "limit")),
+        "renga_list_model_links" => _service.ListModelLinks(OptionalInt(args, "limit")),
         "renga_create_ifc_link" => _service.CreateIfcLink(
             RequireString(args, "path"),
             OptionalInt(args, "levelId"),
@@ -637,6 +648,20 @@ public sealed class McpServer
             RequireDouble(args, "y"),
             RequireDouble(args, "z"),
             OptionalDouble(args, "rotation")),
+        "renga_create_model_link" => _service.CreateModelLink(
+            RequireString(args, "path"),
+            OptionalInt(args, "levelId"),
+            RequireDouble(args, "x"),
+            RequireDouble(args, "y"),
+            RequireDouble(args, "z"),
+            OptionalDouble(args, "rotation")),
+        "renga_delete_link" => _service.DeleteLink(
+            RequireString(args, "kind"),
+            RequireInt(args, "linkId"),
+            OptionalBool(args, "deleteLinkedObjects") ?? true),
+        "renga_reload_link" => _service.ReloadLink(
+            RequireString(args, "kind"),
+            RequireInt(args, "linkId")),
         "renga_export_objects_ifc" => _service.ExportObjectsIfc(
             RequireString(args, "path"),
             OptionalIntArray(args, "objectIds")
@@ -656,7 +681,8 @@ public sealed class McpServer
             RequireInt(args, "objectId"),
             RequireDouble(args, "dx"),
             RequireDouble(args, "dy"),
-            RequireDouble(args, "dz")),
+            RequireDouble(args, "dz"),
+            OptionalInt(args, "targetLevelId")),
         _ => throw new RengaException($"Unknown tool: {name}")
     };
 

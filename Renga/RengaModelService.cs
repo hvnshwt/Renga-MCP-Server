@@ -3321,7 +3321,7 @@ public sealed class RengaModelService
         };
     }
 
-    public object CopyObject(int objectId, double dx, double dy, double dz)
+    public object CopyObject(int objectId, double dx, double dy, double dz, int? targetLevelId = null)
     {
         var offset = new Vector3D
         {
@@ -3338,13 +3338,18 @@ public sealed class RengaModelService
         {
             throw new RengaException(
                 $"Object {objectId} ({TypeName(source.ObjectType)}) cannot be copied. " +
-                "Supported types: wall, column, beam, floor, roof, plate.");
+                "Supported types: wall, column, beam, floor, roof, plate, stair, ramp, railing, " +
+                "wallfoundation, isolatedfoundation.");
         }
 
         if (source is not ILevelObject sourceLevel)
         {
             throw new RengaException($"Object {objectId} does not expose ILevelObject.");
         }
+
+        var targetLevel = targetLevelId is int requestedLevel
+            ? ResolveLevel(model, requestedLevel, null)
+            : ResolveLevel(model, sourceLevel.LevelId, null);
 
         var placement = sourceLevel.GetPlacement();
         var sourceParameters = source.GetParameters();
@@ -3353,13 +3358,16 @@ public sealed class RengaModelService
             ? 0
             : GetIntParameter(sourceParameters, styleParameter) ?? 0;
         var dependents = source is IHostObject host ? host.GetDependentObjectIds() : Array.Empty<int>();
+        var targetLocalZ = placement.Origin.Z + offset.Z;
 
+        IModelObject copy;
+        List<(string Name, int Value)> lateInts;
         var op = StartOperation(project);
         try
         {
             var args = model.CreateNewEntityArgs();
             args.TypeId = source.ObjectType;
-            args.HostObjectId = sourceLevel.LevelId;
+            args.HostObjectId = targetLevel.Id;
             if (styleId > 0)
             {
                 args.StyleId = styleId;
@@ -3371,13 +3379,13 @@ public sealed class RengaModelService
                 {
                     X = placement.Origin.X + offset.X,
                     Y = placement.Origin.Y + offset.Y,
-                    Z = placement.Origin.Z + offset.Z
+                    Z = targetLocalZ
                 },
                 xAxis = placement.AxisX,
                 zAxis = placement.AxisZ
             };
 
-            var copy = model.CreateObject(args)
+            copy = model.CreateObject(args)
                 ?? throw new RengaException("Renga did not create the copied object. " + _connector.LastError);
 
             if (source is IBaseline2DObject sourceBaseline2 &&
@@ -3391,25 +3399,152 @@ public sealed class RengaModelService
                 copyBaseline3.SetBaseline(sourceBaseline3.GetBaseline());
             }
 
-            CopyParameters(source, copy, parameterNames);
+            lateInts = CopyParameters(source, copy, parameterNames);
             op.Apply();
+        }
+        catch
+        {
+            TryRollback(op);
+            throw;
+        }
 
-            return new Dictionary<string, object?>
+        var warnings = new List<string>();
+        if (lateInts.Count > 0)
+        {
+            try
             {
-                ["copied"] = true,
-                ["sourceId"] = objectId,
-                ["id"] = copy.Id,
-                ["uniqueId"] = copy.UniqueIdS,
-                ["type"] = TypeName(copy.ObjectType),
-                ["levelId"] = sourceLevel.LevelId,
-                ["styleId"] = styleId > 0 ? styleId : null,
-                ["offset"] = new { x = dx, y = dy, z = dz },
-                ["placement"] = copy is ILevelObject copyLevel ? DescribePlacement(copyLevel) : null,
-                ["warning"] = dependents.Length > 0
-                    ? $"The source object has dependent object(s): {string.Join(", ", dependents)}. " +
-                      "They were not copied; recreate doors, windows, or openings separately."
-                    : null
+                ApplyLateContainerParameters(
+                    project,
+                    copy.GetParameters(),
+                    $"Copied object {copy.Id}",
+                    lateInts,
+                    Array.Empty<(string, double)>(),
+                    null);
+            }
+            catch (Exception ex)
+            {
+                warnings.Add(ex.Message);
+            }
+        }
+
+        var copiedDependents = new List<Dictionary<string, object?>>();
+        if (source.ObjectType == RengaIds.Wall && dependents.Length > 0)
+        {
+            foreach (var dependentId in dependents)
+            {
+                var dependent = FindObject(model, dependentId);
+                if (dependent is null)
+                {
+                    continue;
+                }
+
+                if (dependent.ObjectType != RengaIds.Door && dependent.ObjectType != RengaIds.Window)
+                {
+                    warnings.Add(
+                        $"Dependent object {dependentId} ({TypeName(dependent.ObjectType)}) was not copied.");
+                    continue;
+                }
+
+                try
+                {
+                    var dependentCopy = CopyWallDependent(
+                        project,
+                        model,
+                        dependent,
+                        copy,
+                        offset);
+                    copiedDependents.Add(new Dictionary<string, object?>
+                    {
+                        ["sourceId"] = dependentId,
+                        ["id"] = dependentCopy.Id,
+                        ["type"] = TypeName(dependentCopy.ObjectType)
+                    });
+                }
+                catch (Exception ex)
+                {
+                    warnings.Add($"Dependent object {dependentId} could not be copied: {ex.Message}");
+                }
+            }
+        }
+        else if (dependents.Length > 0)
+        {
+            warnings.Add(
+                $"The source object has dependent object(s): {string.Join(", ", dependents)}. " +
+                "They were not copied.");
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["copied"] = true,
+            ["sourceId"] = objectId,
+            ["id"] = copy.Id,
+            ["uniqueId"] = copy.UniqueIdS,
+            ["type"] = TypeName(copy.ObjectType),
+            ["levelId"] = targetLevel.Id,
+            ["levelName"] = targetLevel.Name,
+            ["styleId"] = styleId > 0 ? styleId : null,
+            ["offset"] = new { x = dx, y = dy, z = dz },
+            ["placement"] = copy is ILevelObject copyLevel ? DescribePlacement(copyLevel) : null,
+            ["copiedDependents"] = copiedDependents.ToArray(),
+            ["warning"] = warnings.Count == 0 ? null : string.Join(" ", warnings)
+        };
+    }
+
+    private IModelObject CopyWallDependent(
+        IProject project,
+        IModel model,
+        IModelObject dependent,
+        IModelObject newHost,
+        Vector3D offset)
+    {
+        if (dependent is not ILevelObject dependentLevel)
+        {
+            throw new RengaException($"Dependent object {dependent.Id} does not expose ILevelObject.");
+        }
+
+        var placement = dependentLevel.GetPlacement();
+        var container = dependent.GetParameters();
+        var styleName = dependent.ObjectType == RengaIds.Door ? "DoorStyleId" : "WindowStyleId";
+        var styleId = GetIntParameter(container, styleName) ?? 0;
+        var targetLocalZ = placement.Origin.Z + offset.Z;
+
+        var op = StartOperation(project);
+        try
+        {
+            var args = model.CreateNewEntityArgs();
+            args.TypeId = dependent.ObjectType;
+            args.HostObjectId = newHost.Id;
+            args.StyleId = styleId;
+            args.Placement3D = new Placement3D
+            {
+                Origin = new Point3D
+                {
+                    X = placement.Origin.X + offset.X,
+                    Y = placement.Origin.Y + offset.Y,
+                    Z = targetLocalZ
+                },
+                xAxis = placement.AxisX,
+                zAxis = placement.AxisZ
             };
+
+            var copy = model.CreateObject(args)
+                ?? throw new RengaException("Renga did not create the copied dependent object. " + _connector.LastError);
+
+            if (dependent.ObjectType == RengaIds.Door)
+            {
+                CopyDouble(container, copy.GetParameters(), "DoorWidth");
+                CopyDouble(container, copy.GetParameters(), "DoorHeight");
+                CopyDouble(container, copy.GetParameters(), "Offset");
+            }
+            else
+            {
+                CopyDouble(container, copy.GetParameters(), "WindowWidth");
+                CopyDouble(container, copy.GetParameters(), "WindowHeight");
+                CopyDouble(container, copy.GetParameters(), "Offset");
+            }
+
+            op.Apply();
+            return copy;
         }
         catch
         {
@@ -3457,19 +3592,172 @@ public sealed class RengaModelService
         };
     }
 
-    public object ListIfcLinks(int? limit)
+    public object ListIfcLinks(int? limit) => ListLinks("ifc", limit);
+
+    public object ListModelLinks(int? limit) => ListLinks("model", limit);
+
+    public object CreateIfcLink(
+        string path,
+        int? levelId,
+        double x,
+        double y,
+        double z,
+        double? rotationDegrees) =>
+        CreateLink("ifc", path, levelId, x, y, z, rotationDegrees);
+
+    public object CreateModelLink(
+        string path,
+        int? levelId,
+        double x,
+        double y,
+        double z,
+        double? rotationDegrees) =>
+        CreateLink("model", path, levelId, x, y, z, rotationDegrees);
+
+    public object DeleteLink(string kind, int linkId, bool deleteLinkedObjects = true)
     {
+        var spec = ResolveLinkSpec(kind);
         var project = _connector.RequireProject();
         var model = project.Model;
+        var collection = spec.Collection(project);
+        var linkEntity = FindEntityById(collection, linkId)
+            ?? throw new RengaException($"Link {linkId} was not found in {spec.Kind} links.");
+        var linkedObjects = GetLinkedObjects(model, linkId);
+        if (linkedObjects.Count > 0 && !deleteLinkedObjects)
+        {
+            throw new RengaException(
+                $"Link {linkId} has {linkedObjects.Count} linked object(s): " +
+                $"{string.Join(", ", linkedObjects.Select(obj => obj.Id))}. " +
+                "Pass deleteLinkedObjects=true to delete them with the link.");
+        }
+
+        var summaries = linkedObjects
+            .Select(obj => new Dictionary<string, object?>
+            {
+                ["id"] = obj.Id,
+                ["type"] = TypeName(obj.ObjectType),
+                ["name"] = obj.Name
+            })
+            .ToArray();
+
+        var op = StartOperation(project);
+        try
+        {
+            foreach (var obj in linkedObjects)
+            {
+                model.DeleteObjectById(obj.Id);
+            }
+
+            collection.Remove(linkId);
+            op.Apply();
+        }
+        catch (Exception ex)
+        {
+            TryRollback(op);
+            throw new RengaException(
+                $"Renga could not delete link {linkId}: {ex.Message}. {_connector.LastError}".Trim(),
+                ex);
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["deleted"] = true,
+            ["kind"] = spec.Kind,
+            ["linkId"] = linkId,
+            ["deletedObjects"] = summaries,
+            ["deletedObjectIds"] = summaries.Select(item => item["id"]).ToArray(),
+            ["remainingLinkCount"] = collection.Count
+        };
+    }
+
+    public object ReloadLink(string kind, int linkId)
+    {
+        var spec = ResolveLinkSpec(kind);
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var collection = spec.Collection(project);
+        var linkEntity = FindEntityById(collection, linkId)
+            ?? throw new RengaException($"Link {linkId} was not found in {spec.Kind} links.");
+        var container = GetEntityContainer(linkEntity);
+        var savedPath = container is null ? null : GetStringParameter(container, "SavedPath");
+        var absolutePath = ResolveLinkPath(savedPath)
+            ?? throw new RengaException(
+                $"Link {linkId} does not expose a saved path. Recreate the link instead.");
+        if (!File.Exists(absolutePath))
+        {
+            throw new RengaException(
+                $"Linked file was not found: {absolutePath}. Restore the file and retry.");
+        }
+
+        var linkedObjects = GetLinkedObjects(model, linkId);
+        if (linkedObjects.Count == 0)
+        {
+            throw new RengaException(
+                $"Link {linkId} has no linked model objects. Use renga_create_{spec.Kind}_link to create one.");
+        }
+
+        if (linkedObjects.Count > 1)
+        {
+            throw new RengaException(
+                $"Link {linkId} has {linkedObjects.Count} linked objects. " +
+                "Reloading is supported only for a link with one object; delete and recreate the others explicitly.");
+        }
+
+        var source = linkedObjects[0];
+        if (source is not ILevelObject sourceLevel)
+        {
+            throw new RengaException($"Linked object {source.Id} does not expose ILevelObject.");
+        }
+
+        var placement = sourceLevel.GetPlacement();
+        var levelId = sourceLevel.LevelId;
+
+        var op = StartOperation(project);
+        try
+        {
+            model.DeleteObjectById(source.Id);
+            collection.Remove(linkId);
+            op.Apply();
+        }
+        catch (Exception ex)
+        {
+            TryRollback(op);
+            throw new RengaException(
+                $"Renga could not remove the old link {linkId}: {ex.Message}. {_connector.LastError}".Trim(),
+                ex);
+        }
+
+        var recreated = CreateLinkAt(spec, absolutePath, levelId, placement);
+        return new Dictionary<string, object?>
+        {
+            ["reloaded"] = true,
+            ["kind"] = spec.Kind,
+            ["oldLinkId"] = linkId,
+            ["path"] = absolutePath,
+            ["objectId"] = recreated.Id,
+            ["uniqueId"] = recreated.UniqueIdS,
+            ["placement"] = recreated is ILevelObject levelObject ? DescribePlacement(levelObject) : null,
+            ["warning"] = "The link and object were recreated; their local IDs changed."
+        };
+    }
+
+    private object ListLinks(string kind, int? limit)
+    {
+        var spec = ResolveLinkSpec(kind);
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var collection = spec.Collection(project);
         var max = Math.Clamp(limit ?? 500, 1, 5000);
         var objects = model.GetObjects();
 
         var linkedObjectIds = new HashSet<int>();
         var links = new List<Dictionary<string, object?>>();
-        for (var i = 0; i < project.IfcLinks.Count && links.Count < max; i++)
+        for (var i = 0; i < collection.Count && links.Count < max; i++)
         {
-            var entity = project.IfcLinks.GetByIndex(i);
+            var entity = collection.GetByIndex(i);
             var container = GetEntityContainer(entity);
+            var savedPath = container is null ? null : GetStringParameter(container, "SavedPath");
+            var absolutePath = ResolveLinkPath(savedPath);
             var linkedObjects = new List<Dictionary<string, object?>>();
             for (var j = 0; j < objects.Count; j++)
             {
@@ -3486,10 +3774,13 @@ public sealed class RengaModelService
 
             links.Add(new Dictionary<string, object?>
             {
+                ["kind"] = spec.Kind,
                 ["linkId"] = entity.Id,
                 ["uniqueId"] = entity.UniqueIdS,
                 ["name"] = entity.Name,
-                ["savedPath"] = container is null ? null : GetStringParameter(container, "SavedPath"),
+                ["savedPath"] = savedPath,
+                ["absolutePath"] = absolutePath,
+                ["fileExists"] = absolutePath is not null && File.Exists(absolutePath),
                 ["linkFileType"] = container is null ? null : GetStringParameter(container, "LinkFileType"),
                 ["pathType"] = container is null ? null : GetIntParameter(container, "PathType"),
                 ["loadType"] = container is null ? null : GetIntParameter(container, "LoadType"),
@@ -3501,7 +3792,7 @@ public sealed class RengaModelService
         for (var i = 0; i < objects.Count; i++)
         {
             var obj = objects.GetByIndex(i);
-            if (obj.ObjectType == RengaIds.IfcModel && !linkedObjectIds.Contains(obj.Id))
+            if (obj.ObjectType == spec.ObjectType && !linkedObjectIds.Contains(obj.Id))
             {
                 unlinkedModels.Add(DescribeLinkedObject(obj));
             }
@@ -3509,15 +3800,17 @@ public sealed class RengaModelService
 
         return new Dictionary<string, object?>
         {
-            ["count"] = project.IfcLinks.Count,
+            ["kind"] = spec.Kind,
+            ["count"] = collection.Count,
             ["limit"] = max,
-            ["truncated"] = project.IfcLinks.Count > max,
+            ["truncated"] = collection.Count > max,
             ["links"] = links.ToArray(),
-            ["unlinkedIfcModels"] = unlinkedModels.ToArray()
+            ["unlinkedModels"] = unlinkedModels.ToArray()
         };
     }
 
-    public object CreateIfcLink(
+    private object CreateLink(
+        string kind,
         string path,
         int? levelId,
         double x,
@@ -3525,7 +3818,8 @@ public sealed class RengaModelService
         double z,
         double? rotationDegrees)
     {
-        var fullPath = RequireExistingFile(path, ".ifc");
+        var spec = ResolveLinkSpec(kind);
+        var fullPath = RequireExistingFile(path, spec.Extension);
         var px = Units.ToMillimeters(RequireFinite(x, "x"));
         var py = Units.ToMillimeters(RequireFinite(y, "y"));
         var pz = Units.ToMillimeters(RequireFinite(z, "z"));
@@ -3542,7 +3836,7 @@ public sealed class RengaModelService
         try
         {
             var args = model.CreateNewEntityArgs();
-            args.TypeId = RengaIds.IfcModel;
+            args.TypeId = spec.ObjectType;
             args.HostObjectId = level.Id;
             args.FilePath = fullPath;
             args.Placement3D = new Placement3D
@@ -3554,7 +3848,7 @@ public sealed class RengaModelService
 
             obj = model.CreateObject(args)
                 ?? throw new RengaException(
-                    "Renga did not create the IFC link. Check that the file is a valid .ifc and that the level exists. " +
+                    $"Renga did not create the {spec.Kind} link. Check that the file is valid and the level exists. " +
                     _connector.LastError);
             op.Apply();
         }
@@ -3565,11 +3859,12 @@ public sealed class RengaModelService
         }
 
         var linkInfo = GetObjectWithLink(obj);
-        var linkEntity = linkInfo is null ? null : FindEntityById(project.IfcLinks, linkInfo.LinkId);
+        var linkEntity = linkInfo is null ? null : FindEntityById(spec.Collection(project), linkInfo.LinkId);
 
         return new Dictionary<string, object?>
         {
             ["created"] = true,
+            ["kind"] = spec.Kind,
             ["objectId"] = obj.Id,
             ["uniqueId"] = obj.UniqueIdS,
             ["type"] = TypeName(obj.ObjectType),
@@ -3581,6 +3876,57 @@ public sealed class RengaModelService
             ["linkName"] = linkEntity?.Name,
             ["placement"] = obj is ILevelObject levelObject ? DescribePlacement(levelObject) : null
         };
+    }
+
+    private IModelObject CreateLinkAt(LinkSpec spec, string fullPath, int levelId, IPlacement3D placement)
+    {
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var level = FindLevel(model, levelId)
+            ?? throw new RengaException($"Level with ID {levelId} was not found.");
+
+        var op = StartOperation(project);
+        try
+        {
+            var args = model.CreateNewEntityArgs();
+            args.TypeId = spec.ObjectType;
+            args.HostObjectId = level.Id;
+            args.FilePath = fullPath;
+            args.Placement3D = new Placement3D
+            {
+                Origin = placement.Origin,
+                xAxis = placement.AxisX,
+                zAxis = placement.AxisZ
+            };
+
+            var obj = model.CreateObject(args)
+                ?? throw new RengaException(
+                    $"Renga did not recreate the {spec.Kind} link. " + _connector.LastError);
+            op.Apply();
+            return obj;
+        }
+        catch
+        {
+            TryRollback(op);
+            throw;
+        }
+    }
+
+    private static List<IModelObject> GetLinkedObjects(IModel model, int linkId)
+    {
+        var result = new List<IModelObject>();
+        var objects = model.GetObjects();
+        for (var i = 0; i < objects.Count; i++)
+        {
+            var obj = objects.GetByIndex(i);
+            var link = GetObjectWithLink(obj);
+            if (link is not null && link.LinkId == linkId)
+            {
+                result.Add(obj);
+            }
+        }
+
+        return result;
     }
 
     public object ExportObjectsIfc(string path, IReadOnlyList<int> objectIds, bool? overwrite)
@@ -4038,6 +4384,79 @@ public sealed class RengaModelService
         };
     }
 
+    public object SetObjectPlacement(
+        int objectId,
+        double x,
+        double y,
+        double z,
+        double? rotationDegrees)
+    {
+        var px = Units.ToMillimeters(RequireFinite(x, "x"));
+        var py = Units.ToMillimeters(RequireFinite(y, "y"));
+        var pz = Units.ToMillimeters(RequireFinite(z, "z"));
+        var rotation = rotationDegrees is null
+            ? (double?)null
+            : RequireFinite(rotationDegrees.Value, "rotation");
+
+        var project = _connector.RequireProject();
+        var obj = FindObject(project.Model, objectId)
+            ?? throw new RengaException($"Object with ID {objectId} was not found.");
+        var levelObject = RequirePlaceableObject(obj);
+        var level = FindLevel(project.Model, levelObject.LevelId)
+            ?? throw new RengaException($"Level with ID {levelObject.LevelId} was not found.");
+        var levelElevation = ((ILevel)level).Elevation;
+        var localZ = pz - levelElevation;
+
+        var before = levelObject.GetPlacement();
+        var axisX = rotation is null
+            ? before.AxisX
+            : new Vector3D
+            {
+                X = Math.Cos(rotation.Value * Math.PI / 180.0),
+                Y = Math.Sin(rotation.Value * Math.PI / 180.0),
+                Z = 0
+            };
+        var axisZ = rotation is null
+            ? before.AxisZ
+            : new Vector3D { X = 0, Y = 0, Z = 1 };
+        var target = _connector.Connect().Math.CreatePlacement3D(
+            new Point3D { X = px, Y = py, Z = localZ },
+            axisX,
+            axisZ);
+
+        var op = StartOperation(project);
+        try
+        {
+            levelObject.SetPlacement(target);
+            op.Apply();
+        }
+        catch (Exception ex)
+        {
+            TryRollback(op);
+            throw PlacementException("set placement for", obj, ex);
+        }
+
+        var after = levelObject.GetPlacement();
+        if (Math.Abs(after.Origin.X - px) > 1.0 ||
+            Math.Abs(after.Origin.Y - py) > 1.0 ||
+            Math.Abs(after.Origin.Z - localZ) > 1.0)
+        {
+            throw new RengaException(
+                $"Object {objectId} ({TypeName(obj.ObjectType)}) did not accept the absolute placement. " +
+                "Renga applies SetPlacement silently for some objects (for example, hosts with dependent objects).");
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["placed"] = true,
+            ["objectId"] = objectId,
+            ["type"] = TypeName(obj.ObjectType),
+            ["requested"] = new { x = x, y = y, z = z, rotation },
+            ["before"] = DescribePlacement(before),
+            ["after"] = DescribePlacement(after)
+        };
+    }
+
     public object ListKnownQuantities()
     {
         return new Dictionary<string, object?>
@@ -4109,7 +4528,86 @@ public sealed class RengaModelService
                 ex);
         }
 
-        var explicitList = quantityNames is { Count: > 0 };
+        var definitions = ResolveQuantityDefinitions(quantityNames, out var explicitList);
+        var items = DescribeQuantities(obj, container, definitions, explicitList);
+
+        return new Dictionary<string, object?>
+        {
+            ["objectId"] = objectId,
+            ["type"] = TypeName(obj.ObjectType),
+            ["count"] = items.Count,
+            ["quantities"] = items.ToArray()
+        };
+    }
+
+    public object GetQuantitiesBatch(
+        IReadOnlyList<int> objectIds,
+        IReadOnlyList<string>? quantityNames)
+    {
+        if (objectIds.Count == 0)
+        {
+            throw new RengaException("At least one object ID is required.");
+        }
+
+        var project = _connector.RequireProject();
+        var ids = objectIds.Distinct().Take(500).ToArray();
+        var max = Math.Clamp(ids.Length, 1, 500);
+        var definitions = ResolveQuantityDefinitions(quantityNames, out var explicitList);
+        var results = new List<Dictionary<string, object?>>();
+        var missing = new List<int>();
+
+        foreach (var id in ids)
+        {
+            var obj = FindObject(project.Model, id);
+            if (obj is null)
+            {
+                missing.Add(id);
+                continue;
+            }
+
+            IQuantityContainer container;
+            try
+            {
+                container = obj.GetQuantities();
+            }
+            catch
+            {
+                results.Add(new Dictionary<string, object?>
+                {
+                    ["objectId"] = id,
+                    ["type"] = TypeName(obj.ObjectType),
+                    ["count"] = 0,
+                    ["quantities"] = Array.Empty<object>(),
+                    ["error"] = "This object does not expose quantities."
+                });
+                continue;
+            }
+
+            var items = DescribeQuantities(obj, container, definitions, explicitList);
+            results.Add(new Dictionary<string, object?>
+            {
+                ["objectId"] = id,
+                ["type"] = TypeName(obj.ObjectType),
+                ["count"] = items.Count,
+                ["quantities"] = items.ToArray()
+            });
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["count"] = results.Count,
+            ["limit"] = max,
+            ["truncated"] = objectIds.Distinct().Count() > max,
+            ["missingObjectIds"] = missing.ToArray(),
+            ["items"] = results.ToArray()
+        };
+    }
+
+    private static List<QuantityDefinition> ResolveQuantityDefinitions(
+        IReadOnlyList<string>? quantityNames,
+        out bool explicitList)
+    {
+        explicitList = quantityNames is { Count: > 0 };
         var definitions = new List<QuantityDefinition>();
         if (explicitList)
         {
@@ -4125,6 +4623,15 @@ public sealed class RengaModelService
             definitions.AddRange(RengaQuantities.All);
         }
 
+        return definitions;
+    }
+
+    private static List<Dictionary<string, object?>> DescribeQuantities(
+        IModelObject obj,
+        IQuantityContainer container,
+        IReadOnlyList<QuantityDefinition> definitions,
+        bool explicitList)
+    {
         var items = new List<Dictionary<string, object?>>();
         foreach (var definition in definitions)
         {
@@ -4175,13 +4682,7 @@ public sealed class RengaModelService
             items.Add(DescribeQuantity(obj, definition, quantity, null));
         }
 
-        return new Dictionary<string, object?>
-        {
-            ["objectId"] = objectId,
-            ["type"] = TypeName(obj.ObjectType),
-            ["count"] = items.Count,
-            ["quantities"] = items.ToArray()
-        };
+        return items;
     }
 
     public object SetParameter(int objectId, string parameterName, JsonElement value, string? unit)
@@ -4332,13 +4833,15 @@ public sealed class RengaModelService
         for (var i = 0; i < total && items.Count < max; i++)
         {
             var entity = collection.GetByIndex(i);
-            items.Add(new Dictionary<string, object?>
+            var item = new Dictionary<string, object?>
             {
                 ["id"] = entity.Id,
                 ["uniqueId"] = entity.UniqueIdS,
                 ["name"] = entity.Name,
                 ["typeId"] = entity.TypeIdS
-            });
+            };
+            DescribeStyleDetails(project, normalized, entity, item);
+            items.Add(item);
         }
 
         return new Dictionary<string, object?>
@@ -4349,6 +4852,81 @@ public sealed class RengaModelService
             ["truncated"] = total > max,
             ["items"] = items.ToArray()
         };
+    }
+
+    private static void DescribeStyleDetails(
+        IProject project,
+        string kind,
+        IEntity entity,
+        Dictionary<string, object?> item)
+    {
+        if (kind == "system")
+        {
+            try
+            {
+                var style = project.SystemStyleManager.GetSystemStyle(entity.Id);
+                if (style is not null)
+                {
+                    item["systemCategory"] = SystemCategoryName(style.SystemCategory);
+                    item["systemCategoryValue"] = (int)style.SystemCategory;
+                    item["designation"] = style.Designation;
+                    var color = style.Color;
+                    item["color"] = new Dictionary<string, object?>
+                    {
+                        ["r"] = color.Red,
+                        ["g"] = color.Green,
+                        ["b"] = color.Blue,
+                        ["a"] = color.Alpha
+                    };
+                }
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+
+        if (kind == "profile")
+        {
+            try
+            {
+                item["descriptionId"] = entity.Id;
+                if (project.ProfileDescriptionManager.Contains(entity.Id))
+                {
+                    item["descriptionName"] =
+                        project.ProfileDescriptionManager.GetProfileDescription(entity.Id)?.Name;
+                }
+
+                var container = GetEntityContainer(entity);
+                if (container is not null)
+                {
+                    item["profileType"] = GetIntParameter(container, "ProfileType");
+                }
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+
+        if (kind is "beam" or "column")
+        {
+            try
+            {
+                var profile = kind == "beam"
+                    ? project.BeamStyleManager.GetBeamStyle(entity.Id)?.Profile
+                    : project.ColumnStyleManager.GetColumnStyle(entity.Id)?.Profile;
+                if (profile is not null)
+                {
+                    item["profileDescriptionId"] = profile.DescriptionId;
+                    item["profileRegionCount"] = profile.Regions.Count;
+                }
+            }
+            catch
+            {
+                // ignored
+            }
+        }
     }
 
     public object AssignMaterial(int objectId, int materialId, bool? layered)
@@ -5851,6 +6429,24 @@ public sealed class RengaModelService
         return fullPath;
     }
 
+    private static string? ResolveLinkPath(string? savedPath)
+    {
+        if (string.IsNullOrWhiteSpace(savedPath))
+        {
+            return null;
+        }
+
+        if (Path.IsPathRooted(savedPath))
+        {
+            return savedPath;
+        }
+
+        var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        return string.IsNullOrWhiteSpace(documents)
+            ? Path.GetFullPath(savedPath)
+            : Path.GetFullPath(Path.Combine(documents, savedPath));
+    }
+
     private static IObjectWithLink? GetObjectWithLink(IModelObject obj)
     {
         try
@@ -7283,6 +7879,14 @@ public sealed class RengaModelService
             : text;
     }
 
+    private static string SystemCategoryName(SystemCategory category)
+    {
+        var text = category.ToString();
+        return text.StartsWith("SystemCategory_", StringComparison.Ordinal)
+            ? text["SystemCategory_".Length..]
+            : text;
+    }
+
     private static readonly Dictionary<string, Guid> StyleTypeIds = new(StringComparer.OrdinalIgnoreCase)
     {
         ["door"] = RengaIds.DoorStyle,
@@ -7315,6 +7919,9 @@ public sealed class RengaModelService
         ["element_style"] = RengaIds.ElementStyle,
         ["ifc_model"] = RengaIds.IfcModel,
         ["ifc_link"] = RengaIds.IfcLink,
+        ["model3d"] = RengaIds.Model3D,
+        ["model_link"] = RengaIds.ModelLink,
+        ["ifc_element"] = RengaIds.ImportedBuildingElement,
         ["material"] = RengaIds.Material,
         ["line3d"] = RengaIds.Line3D,
         ["pipe"] = RengaIds.Pipe,
@@ -7349,6 +7956,27 @@ public sealed class RengaModelService
         {
             "PlateThickness", "Offset", "PlatePositionRelativeToInsertPoint", "PlateHorizontalOffset",
             "PlateVerticalOffset", "PrecessionAngle", "NutationAngle", "MaterialId"
+        },
+        [RengaIds.Stair] = new[]
+        {
+            "StairHeight", "NumberOfSteps", "StairShape", "StairWidth", "StairThickness",
+            "StairPositionRelativeToBaseline", "StairHorizontalOffset", "Offset"
+        },
+        [RengaIds.Ramp] = new[]
+        {
+            "RampWidth", "RampHeight", "RampShape", "RampPositionRelativeToBaseline",
+            "RampHorizontalOffset", "Offset"
+        },
+        [RengaIds.Railing] = new[] { "RailingHeight", "SpaceBetweenBalusters", "Offset" },
+        [RengaIds.WallFoundation] = new[]
+        {
+            "WallFoundationHeight", "WallFoundationThickness", "WallFoundationShape",
+            "WallFoundationPositionRelativeToBaseline", "WallFoundationHorizontalOffset", "Offset", "MaterialId"
+        },
+        [RengaIds.IsolatedFoundation] = new[]
+        {
+            "IsolatedFoundationShape", "IsolatedFoundationWidth", "IsolatedFoundationDepth",
+            "IsolatedFoundationHeight", "IsolatedFoundationRotationAngle", "Offset", "MaterialId"
         }
     };
 
@@ -7360,8 +7988,12 @@ public sealed class RengaModelService
         return null;
     }
 
-    private static void CopyParameters(IModelObject source, IModelObject target, IEnumerable<string> names)
+    private static List<(string Name, int Value)> CopyParameters(
+        IModelObject source,
+        IModelObject target,
+        IEnumerable<string> names)
     {
+        var lateInts = new List<(string Name, int Value)>();
         var sourceContainer = source.GetParameters();
         var targetContainer = target.GetParameters();
         foreach (var name in names)
@@ -7386,7 +8018,7 @@ public sealed class RengaModelService
                         targetParameter.SetDoubleValue(sourceParameter.GetDoubleValue());
                         break;
                     case ParameterValueType.ParameterValueType_Int:
-                        targetParameter.SetIntValue(sourceParameter.GetIntValue());
+                        lateInts.Add((name, sourceParameter.GetIntValue()));
                         break;
                     case ParameterValueType.ParameterValueType_Bool:
                         targetParameter.SetBoolValue(sourceParameter.GetBoolValue());
@@ -7398,6 +8030,26 @@ public sealed class RengaModelService
                 // A single parameter must not fail the whole copy operation.
             }
         }
+
+        return lateInts;
+    }
+
+    private static void CopyDouble(
+        IParameterContainer source,
+        IParameterContainer target,
+        string name)
+    {
+        var sourceParameter = FindParameter(source, name);
+        var targetParameter = FindParameter(target, name);
+        if (sourceParameter is null ||
+            targetParameter is null ||
+            targetParameter.IsReadOnly ||
+            sourceParameter.ValueType != ParameterValueType.ParameterValueType_Double)
+        {
+            return;
+        }
+
+        targetParameter.SetDoubleValue(sourceParameter.GetDoubleValue());
     }
 
     private static readonly Dictionary<string, Func<IProject, IEntityCollection>> StyleCollections =
@@ -7427,6 +8079,31 @@ public sealed class RengaModelService
             ["material"] = project => project.Materials,
             ["layered_material"] = project => project.LayeredMaterials
         };
+
+    private sealed record LinkSpec(
+        string Kind,
+        string? Extension,
+        Guid ObjectType,
+        Guid LinkType,
+        Func<IProject, IEntityCollection> Collection);
+
+    private static readonly Dictionary<string, LinkSpec> LinkSpecs =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ifc"] = new LinkSpec("ifc", ".ifc", RengaIds.IfcModel, RengaIds.IfcLink, project => project.IfcLinks),
+            ["model"] = new LinkSpec("model", null, RengaIds.Model3D, RengaIds.ModelLink, project => project.ModelLinks)
+        };
+
+    private static LinkSpec ResolveLinkSpec(string kind)
+    {
+        if (string.IsNullOrWhiteSpace(kind) ||
+            !LinkSpecs.TryGetValue(kind.Trim(), out var spec))
+        {
+            throw new RengaException("Link kind must be one of: ifc, model.");
+        }
+
+        return spec;
+    }
 
     private sealed record ResolvedLevel(IModelObject Obj, int Id, string Name, double ElevationMm);
 

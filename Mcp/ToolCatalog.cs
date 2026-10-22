@@ -555,7 +555,7 @@ public static class ToolCatalog
         new ToolSpec(
             "renga_list_styles",
             "List styles",
-            "Lists style collections and their items. Without kind it returns collection names and counts; with kind it returns style IDs and names.",
+            "Lists style collections and their items. Without kind it returns collection names and counts; with kind it returns style IDs and names. System styles include category, designation, and color; profiles include descriptionId and descriptionName; beam and column styles include profile information when available.",
             """
             {
               "type": "object",
@@ -1170,6 +1170,24 @@ public static class ToolCatalog
             }
             """),
         new ToolSpec(
+            "renga_set_object_placement",
+            "Set absolute object placement",
+            "Sets the absolute placement origin of a level object: x and y in project coordinates, z as an absolute elevation in meters. An optional rotation sets the object orientation around Z. The same placement restrictions apply as for move and rotate. The server verifies the result.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Local model object ID." },
+                "x": { "type": "number", "description": "Absolute placement origin X in meters." },
+                "y": { "type": "number", "description": "Absolute placement origin Y in meters." },
+                "z": { "type": "number", "description": "Absolute placement elevation in meters." },
+                "rotation": { "type": "number", "description": "Optional rotation around Z in degrees. When omitted, the current orientation is kept." }
+              },
+              "required": ["objectId", "x", "y", "z"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
             "renga_list_known_quantities",
             "List known quantity IDs",
             "Lists the known Renga quantity GUIDs with names, quantity types, and default units. Renga does not expose a way to enumerate quantity IDs, so this static catalog is used by renga_get_quantity and renga_get_quantities.",
@@ -1212,6 +1230,21 @@ public static class ToolCatalog
             }
             """),
         new ToolSpec(
+            "renga_get_quantities_batch",
+            "Get quantities for several objects",
+            "Reads quantities for several objects in one call. Without a quantity list, returns all supported catalog quantities for each object. Missing object IDs are reported. At most 500 objects are processed.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectIds": { "type": "array", "items": { "type": "integer" }, "description": "Local model object IDs." },
+                "quantities": { "type": "array", "items": { "type": "string" }, "description": "Optional quantity names or GUIDs." }
+              },
+              "required": ["objectIds"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
             "renga_import_ifc",
             "Import an IFC file as a new project",
             "Imports an IFC file through IApplication.ImportIfcProject. The current project is closed without saving and replaced by the imported model. confirm must be true. Use renga_save_project before importing.",
@@ -1229,7 +1262,20 @@ public static class ToolCatalog
         new ToolSpec(
             "renga_list_ifc_links",
             "List IFC links",
-            "Lists IFC links and the model objects created from them. Returns link IDs, names, saved paths, link file type, and linked object IDs with placements. Also reports IfcModel objects that have no registered link.",
+            "Lists IFC links and the model objects created from them. Returns link IDs, names, saved and resolved absolute paths, file existence, link file type, and linked object IDs with placements. Also reports IfcModel objects that have no registered link.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "limit": { "type": "integer", "description": "Optional maximum number of links. Default 500." }
+              },
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_list_model_links",
+            "List 3D model links",
+            "Lists linked 3D model files and the Model3D objects created from them. Returns link IDs, names, saved and resolved absolute paths, file existence, and linked object IDs with placements.",
             """
             {
               "type": "object",
@@ -1255,6 +1301,56 @@ public static class ToolCatalog
                 "rotation": { "type": "number", "description": "Optional rotation around Z in degrees." }
               },
               "required": ["path", "x", "y", "z"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_model_link",
+            "Link a 3D model file into the model",
+            "Creates a Model3D object linked to an external 3D file. levelId selects the host level; when omitted, the level is chosen by z. z is an absolute elevation in meters. Supported 3D formats depend on the Renga license.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string", "description": "Absolute path to a supported 3D file." },
+                "levelId": { "type": "integer", "description": "Optional host level ID. When omitted, the nearest level to z is used." },
+                "x": { "type": "number", "description": "Insertion X in meters." },
+                "y": { "type": "number", "description": "Insertion Y in meters." },
+                "z": { "type": "number", "description": "Absolute insertion elevation in meters." },
+                "rotation": { "type": "number", "description": "Optional rotation around Z in degrees." }
+              },
+              "required": ["path", "x", "y", "z"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_delete_link",
+            "Delete an IFC or model link",
+            "Deletes a link and optionally its linked model objects. The link is removed from IProject.IfcLinks or IProject.ModelLinks in the same operation. By default linked objects are deleted too.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "enum": ["ifc", "model"], "description": "Link kind: ifc or model." },
+                "linkId": { "type": "integer", "description": "Link ID from renga_list_ifc_links or renga_list_model_links." },
+                "deleteLinkedObjects": { "type": "boolean", "description": "Delete linked objects together with the link. Default true." }
+              },
+              "required": ["kind", "linkId"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_reload_link",
+            "Reload an IFC or model link",
+            "Recreates a link from its saved file at the same placement. Only links with exactly one linked object are supported. The old link and object are removed and recreated, so local IDs change. The file must still exist.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "enum": ["ifc", "model"], "description": "Link kind: ifc or model." },
+                "linkId": { "type": "integer", "description": "Link ID from renga_list_ifc_links or renga_list_model_links." }
+              },
+              "required": ["kind", "linkId"],
               "additionalProperties": false
             }
             """),
@@ -1311,7 +1407,7 @@ public static class ToolCatalog
         new ToolSpec(
             "renga_copy_object",
             "Copy a simple model object",
-            "Recreates a wall, column, beam, floor, roof, or plate with an offset, copying its placement, baseline, style, material, and core dimensions. Renga has no universal clone API, so doors, windows, openings, rooms, MEP objects, and other types are not supported. Dependent objects are not copied.",
+            "Recreates a wall, column, beam, floor, roof, plate, stair, ramp, railing, wall foundation, or isolated foundation with an offset, copying placement, baseline, style, material, and core dimensions. targetLevelId lets the copy live on another level. Doors and windows of a copied wall are recreated; other dependent objects are not copied. Renga has no universal clone API, so rooms, MEP objects, and unsupported types return an error.",
             """
             {
               "type": "object",
@@ -1319,7 +1415,8 @@ public static class ToolCatalog
                 "objectId": { "type": "integer", "description": "Source object ID." },
                 "dx": { "type": "number", "description": "Offset along global X in meters." },
                 "dy": { "type": "number", "description": "Offset along global Y in meters." },
-                "dz": { "type": "number", "description": "Vertical offset in meters, relative to the level." }
+                "dz": { "type": "number", "description": "Vertical offset in meters." },
+                "targetLevelId": { "type": "integer", "description": "Optional target level ID. Defaults to the source level." }
               },
               "required": ["objectId", "dx", "dy", "dz"],
               "additionalProperties": false

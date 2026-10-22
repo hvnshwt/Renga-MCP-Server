@@ -34,6 +34,8 @@ public static class RengaIds
     public static readonly Guid IfcLink = new("9bf0d3c4-4ca7-45e1-8ea3-dfbc675cedea");
     public static readonly Guid IfcModel = new("6485ac11-5b26-4d77-9788-7936af87c85f");
     public static readonly Guid ModelLink = new("d769d1c4-8c32-40a8-a716-68bc9b6b5d3c");
+    public static readonly Guid Model3D = new("67a0b42c-8c1e-47e8-b46e-78d8bb260de0");
+    public static readonly Guid ImportedBuildingElement = new("97675473-ca62-4ea4-bc6e-bb2ca57b7e67");
     public static readonly Guid Line3D = new("02bbebe8-e28b-4ee5-8916-11b514a35dca");
     public static readonly Guid Drawing = new("a7dfe1e1-bf2c-4c4a-ba74-3f156b1bbf8f");
     public static readonly Guid DrawingLine = new("681cabaf-4469-438e-83d7-1efd664eda6b");
