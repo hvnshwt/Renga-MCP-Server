@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Renga;
 
 namespace RengaMcpServer.Renga;
@@ -250,7 +251,8 @@ public sealed class RengaModelService
         double x2,
         double y2,
         int levelId,
-        double heightMeters)
+        double heightMeters,
+        double? thicknessMeters)
     {
         var sx = Units.ToMillimeters(RequireFinite(x1, "x1"));
         var sy = Units.ToMillimeters(RequireFinite(y1, "y1"));
@@ -260,6 +262,14 @@ public sealed class RengaModelService
         if (heightMm <= 0)
         {
             throw new RengaException("Wall height must be positive.");
+        }
+
+        var thicknessMm = thicknessMeters is double requestedThickness
+            ? Units.ToMillimeters(RequireFinite(requestedThickness, "thickness"))
+            : 0;
+        if (thicknessMeters is not null && thicknessMm <= 0)
+        {
+            throw new RengaException("Wall thickness must be positive.");
         }
 
         var dx = ex - sx;
@@ -299,6 +309,10 @@ public sealed class RengaModelService
 
             baseline.SetBaseline(CreateLine2D(0, 0, length, 0));
             SetDoubleParameter(wall, RengaParams.WallHeight, heightMm);
+            if (thicknessMm > 0)
+            {
+                SetDoubleParameter(wall, RengaParams.WallThickness, thicknessMm);
+            }
 
             op.Apply();
             applied = true;
@@ -312,6 +326,7 @@ public sealed class RengaModelService
                 ["type"] = wall.ObjectTypeS,
                 ["levelId"] = levelObject?.LevelId ?? levelId,
                 ["height"] = heightMeters,
+                ["thickness"] = thicknessMeters,
                 ["length"] = Units.ToMeters(length),
                 ["start"] = new { x = x1, y = y1 },
                 ["end"] = new { x = x2, y = y2 },
@@ -334,7 +349,8 @@ public sealed class RengaModelService
         double y,
         double heightMeters,
         int? levelId,
-        double? elevationMeters)
+        double? elevationMeters,
+        int? styleId)
     {
         var px = Units.ToMillimeters(RequireFinite(x, "x"));
         var py = Units.ToMillimeters(RequireFinite(y, "y"));
@@ -365,10 +381,12 @@ public sealed class RengaModelService
                 zAxis = new Vector3D { X = 0, Y = 0, Z = 1 }
             };
 
-            var styleId = FirstStyleId(project.ColumnStyles);
-            if (styleId > 0)
+            var resolvedStyleId = styleId is int requestedStyle && requestedStyle > 0
+                ? requestedStyle
+                : FirstStyleId(project.ColumnStyles);
+            if (resolvedStyleId > 0)
             {
-                args.StyleId = styleId;
+                args.StyleId = resolvedStyleId;
             }
 
             var column = model.CreateObject(args)
@@ -390,7 +408,8 @@ public sealed class RengaModelService
                 ["x"] = x,
                 ["y"] = y,
                 ["height"] = heightMeters,
-                ["elevationAboveLevel"] = Units.ToMeters(levelObject?.ElevationAboveLevel ?? localZ)
+                ["elevationAboveLevel"] = Units.ToMeters(levelObject?.ElevationAboveLevel ?? localZ),
+                ["styleId"] = resolvedStyleId
             };
         }
         catch
@@ -411,7 +430,8 @@ public sealed class RengaModelService
         double x2,
         double y2,
         double z2,
-        int? levelId)
+        int? levelId,
+        int? styleId)
     {
         var sx = Units.ToMillimeters(RequireFinite(x1, "x1"));
         var sy = Units.ToMillimeters(RequireFinite(y1, "y1"));
@@ -444,10 +464,12 @@ public sealed class RengaModelService
             args.HostObjectId = level.Id;
             args.Placement3D = IdentityPlacement();
 
-            var styleId = FirstStyleId(project.BeamStyles);
-            if (styleId > 0)
+            var resolvedStyleId = styleId is int requestedStyle && requestedStyle > 0
+                ? requestedStyle
+                : FirstStyleId(project.BeamStyles);
+            if (resolvedStyleId > 0)
             {
-                args.StyleId = styleId;
+                args.StyleId = resolvedStyleId;
             }
 
             var beam = model.CreateObject(args)
@@ -478,7 +500,7 @@ public sealed class RengaModelService
                 ["length"] = Units.ToMeters(length),
                 ["start"] = new { x = x1, y = y1, z = z1 },
                 ["end"] = new { x = x2, y = y2, z = z2 },
-                ["styleId"] = styleId
+                ["styleId"] = resolvedStyleId
             };
         }
         catch
@@ -498,7 +520,8 @@ public sealed class RengaModelService
         double y,
         double widthMeters,
         double heightMeters,
-        double? offsetMeters)
+        double? offsetMeters,
+        int? styleId)
     {
         var px = Units.ToMillimeters(RequireFinite(x, "x"));
         var py = Units.ToMillimeters(RequireFinite(y, "y"));
@@ -527,7 +550,10 @@ public sealed class RengaModelService
             var args = model.CreateNewEntityArgs();
             args.TypeId = RengaIds.Door;
             args.HostObjectId = wallId;
-            args.StyleId = 0;
+            var resolvedStyleId = styleId is int requestedStyle && requestedStyle > 0
+                ? requestedStyle
+                : 0;
+            args.StyleId = resolvedStyleId;
             args.Placement3D = new Placement3D
             {
                 Origin = new Point3D { X = px, Y = py, Z = offsetMm },
@@ -556,7 +582,8 @@ public sealed class RengaModelService
                 ["y"] = y,
                 ["width"] = widthMeters,
                 ["height"] = heightMeters,
-                ["offset"] = Units.ToMeters(offsetMm)
+                ["offset"] = Units.ToMeters(offsetMm),
+                ["styleId"] = resolvedStyleId
             };
         }
         catch
@@ -576,7 +603,8 @@ public sealed class RengaModelService
         double y,
         double widthMeters,
         double heightMeters,
-        double? sillMeters)
+        double? sillMeters,
+        int? styleId)
     {
         var px = Units.ToMillimeters(RequireFinite(x, "x"));
         var py = Units.ToMillimeters(RequireFinite(y, "y"));
@@ -605,7 +633,10 @@ public sealed class RengaModelService
             var args = model.CreateNewEntityArgs();
             args.TypeId = RengaIds.Window;
             args.HostObjectId = wallId;
-            args.StyleId = 0;
+            var resolvedStyleId = styleId is int requestedStyle && requestedStyle > 0
+                ? requestedStyle
+                : 0;
+            args.StyleId = resolvedStyleId;
             args.Placement3D = new Placement3D
             {
                 Origin = new Point3D { X = px, Y = py, Z = sillMm },
@@ -634,7 +665,8 @@ public sealed class RengaModelService
                 ["y"] = y,
                 ["width"] = widthMeters,
                 ["height"] = heightMeters,
-                ["sill"] = Units.ToMeters(sillMm)
+                ["sill"] = Units.ToMeters(sillMm),
+                ["styleId"] = resolvedStyleId
             };
         }
         catch
@@ -945,6 +977,359 @@ public sealed class RengaModelService
             ["project"] = DescribeProject(project, model),
             ["levels"] = ReadLevels(model).Select(ToDictionary).ToArray()
         };
+    }
+
+    public object ListObjects(string? type, int? limit)
+    {
+        var project = _connector.RequireProject();
+        var model = project.Model;
+        var max = Math.Clamp(limit ?? 500, 1, 5000);
+
+        Guid? typeFilter = null;
+        if (!string.IsNullOrWhiteSpace(type))
+        {
+            var trimmed = type.Trim();
+            if (Guid.TryParse(trimmed, out var parsed))
+            {
+                typeFilter = parsed;
+            }
+            else if (FriendlyTypeNames.TryGetValue(trimmed, out var known))
+            {
+                typeFilter = known;
+            }
+            else
+            {
+                throw new RengaException(
+                    $"Unknown object type '{type}'. Use a GUID or one of: {string.Join(", ", FriendlyTypeNames.Keys)}.");
+            }
+        }
+
+        var items = new List<Dictionary<string, object?>>();
+        var objects = model.GetObjects();
+        for (var i = 0; i < objects.Count; i++)
+        {
+            var obj = objects.GetByIndex(i);
+            if (typeFilter is Guid filter && obj.ObjectType != filter)
+            {
+                continue;
+            }
+
+            items.Add(DescribeObject(obj));
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["total"] = items.Count,
+            ["limit"] = max,
+            ["truncated"] = items.Count > max,
+            ["items"] = items.Take(max).ToArray()
+        };
+    }
+
+    public object GetObject(int objectId, bool includeProperties)
+    {
+        var project = _connector.RequireProject();
+        var obj = FindObject(project.Model, objectId)
+            ?? throw new RengaException($"Object with ID {objectId} was not found.");
+
+        var result = DescribeObject(obj);
+        result["parameters"] = DescribeParameters(obj, project);
+        if (includeProperties)
+        {
+            result["properties"] = DescribeProperties(obj);
+        }
+
+        return result;
+    }
+
+    public object ListParameters(int objectId)
+    {
+        var project = _connector.RequireProject();
+        var obj = FindObject(project.Model, objectId)
+            ?? throw new RengaException($"Object with ID {objectId} was not found.");
+
+        var result = DescribeObject(obj);
+        result["parameters"] = DescribeParameters(obj, project);
+        return result;
+    }
+
+    public object SetParameter(int objectId, string parameterName, JsonElement value, string? unit)
+    {
+        var project = _connector.RequireProject();
+        var obj = FindObject(project.Model, objectId)
+            ?? throw new RengaException($"Object with ID {objectId} was not found.");
+
+        var container = obj.GetParameters();
+        var parameter = FindParameter(container, parameterName)
+            ?? throw new RengaException(
+                $"Parameter '{parameterName}' was not found on object {objectId}. " +
+                "Use renga_list_parameters to inspect available parameter names and GUIDs.");
+
+        var clrValue = ParseJsonParameterValue(value, parameter);
+        return ApplyParameterValue(project, obj, parameter, clrValue, unit);
+    }
+
+    public object ListMaterials(string? kind, int? limit)
+    {
+        var project = _connector.RequireProject();
+        var max = Math.Clamp(limit ?? 500, 1, 5000);
+        var normalized = string.IsNullOrWhiteSpace(kind) ? "all" : kind.Trim().ToLowerInvariant();
+        var includeMaterials = normalized is "all" or "material";
+        var includeLayered = normalized is "all" or "layered" or "layered_material";
+        if (!includeMaterials && !includeLayered)
+        {
+            throw new RengaException("Material kind must be one of: all, material, layered.");
+        }
+
+        var materials = new List<Dictionary<string, object?>>();
+        if (includeMaterials)
+        {
+            var collection = project.Materials;
+            for (var i = 0; i < collection.Count && materials.Count < max; i++)
+            {
+                var entity = collection.GetByIndex(i);
+                var material = entity as IMaterial;
+                var color = material?.Color;
+                materials.Add(new Dictionary<string, object?>
+                {
+                    ["id"] = entity.Id,
+                    ["uniqueId"] = entity.UniqueIdS,
+                    ["name"] = material?.Name ?? entity.Name,
+                    ["density"] = material?.Density,
+                    ["color"] = color is null
+                        ? null
+                        : new Dictionary<string, object?>
+                        {
+                            ["r"] = color.Value.Red,
+                            ["g"] = color.Value.Green,
+                            ["b"] = color.Value.Blue,
+                            ["a"] = color.Value.Alpha
+                        }
+                });
+            }
+        }
+
+        var layeredMaterials = new List<Dictionary<string, object?>>();
+        if (includeLayered)
+        {
+            var collection = project.LayeredMaterials;
+            for (var i = 0; i < collection.Count && layeredMaterials.Count < max; i++)
+            {
+                var entity = collection.GetByIndex(i);
+                var layered = entity as ILayeredMaterial;
+                var layers = new List<Dictionary<string, object?>>();
+                if (layered is not null)
+                {
+                    try
+                    {
+                        var layerCollection = layered.Layers;
+                        for (var j = 0; j < layerCollection.Count; j++)
+                        {
+                            var layer = layerCollection.Get(j);
+                            layers.Add(new Dictionary<string, object?>
+                            {
+                                ["id"] = layer.Id,
+                                ["thickness"] = Units.ToMeters(layer.Thickness),
+                                ["materialId"] = layer.Material?.Id,
+                                ["materialName"] = layer.Material?.Name
+                            });
+                        }
+                    }
+                    catch
+                    {
+                        // ignored
+                    }
+                }
+
+                layeredMaterials.Add(new Dictionary<string, object?>
+                {
+                    ["id"] = entity.Id,
+                    ["uniqueId"] = entity.UniqueIdS,
+                    ["name"] = layered?.Name ?? entity.Name,
+                    ["baseLayerIndex"] = layered?.BaseLayerIndex,
+                    ["layers"] = layers.ToArray()
+                });
+            }
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["materials"] = materials.ToArray(),
+            ["layeredMaterials"] = layeredMaterials.ToArray(),
+            ["materialCount"] = project.Materials.Count,
+            ["layeredMaterialCount"] = project.LayeredMaterials.Count
+        };
+    }
+
+    public object ListStyles(string? kind, int? limit)
+    {
+        var project = _connector.RequireProject();
+        var max = Math.Clamp(limit ?? 500, 1, 5000);
+
+        if (string.IsNullOrWhiteSpace(kind))
+        {
+            var collections = new List<Dictionary<string, object?>>();
+            foreach (var pair in StyleCollections)
+            {
+                try
+                {
+                    collections.Add(new Dictionary<string, object?>
+                    {
+                        ["kind"] = pair.Key,
+                        ["count"] = pair.Value(project).Count
+                    });
+                }
+                catch
+                {
+                    // ignored
+                }
+            }
+
+            return new Dictionary<string, object?> { ["collections"] = collections.ToArray() };
+        }
+
+        var normalized = kind.Trim().ToLowerInvariant();
+        if (!StyleCollections.TryGetValue(normalized, out var getter))
+        {
+            throw new RengaException(
+                $"Unknown style kind '{kind}'. Allowed values: {string.Join(", ", StyleCollections.Keys)}.");
+        }
+
+        var collection = getter(project);
+        var total = collection.Count;
+        var items = new List<Dictionary<string, object?>>();
+        for (var i = 0; i < total && items.Count < max; i++)
+        {
+            var entity = collection.GetByIndex(i);
+            items.Add(new Dictionary<string, object?>
+            {
+                ["id"] = entity.Id,
+                ["uniqueId"] = entity.UniqueIdS,
+                ["name"] = entity.Name,
+                ["typeId"] = entity.TypeIdS
+            });
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["kind"] = normalized,
+            ["total"] = total,
+            ["limit"] = max,
+            ["truncated"] = total > max,
+            ["items"] = items.ToArray()
+        };
+    }
+
+    public object AssignMaterial(int objectId, int materialId, bool? layered)
+    {
+        var project = _connector.RequireProject();
+        var obj = FindObject(project.Model, objectId)
+            ?? throw new RengaException($"Object with ID {objectId} was not found.");
+
+        var material = FindEntityById(project.Materials, materialId);
+        var layeredMaterial = FindEntityById(project.LayeredMaterials, materialId);
+
+        string materialKind;
+        string materialName;
+        if (layered == true)
+        {
+            if (layeredMaterial is null)
+            {
+                throw new RengaException($"Layered material with ID {materialId} was not found.");
+            }
+
+            materialKind = "layered";
+            materialName = layeredMaterial.Name;
+        }
+        else if (layered == false)
+        {
+            if (material is null)
+            {
+                throw new RengaException($"Material with ID {materialId} was not found.");
+            }
+
+            materialKind = "material";
+            materialName = material.Name;
+        }
+        else if (material is not null)
+        {
+            materialKind = "material";
+            materialName = material.Name;
+        }
+        else if (layeredMaterial is not null)
+        {
+            materialKind = "layered";
+            materialName = layeredMaterial.Name;
+        }
+        else
+        {
+            throw new RengaException($"Material or layered material with ID {materialId} was not found.");
+        }
+
+        var parameterName = materialKind == "layered" ? "LayeredMaterialId" : "MaterialId";
+        var container = obj.GetParameters();
+        var parameter = FindParameter(container, parameterName)
+            ?? throw new RengaException(
+                materialKind == "layered"
+                    ? "This object does not expose LayeredMaterialId. Walls, floors, and roofs typically use layered materials."
+                    : "This object does not expose MaterialId. Use a layered material for walls, floors, and roofs.");
+
+        var result = (Dictionary<string, object?>)ApplyParameterValue(
+            project,
+            obj,
+            parameter,
+            materialId,
+            null);
+        result["materialId"] = materialId;
+        result["materialName"] = materialName;
+        result["materialKind"] = materialKind;
+        return result;
+    }
+
+    public object CreateMaterial(string name, double? density)
+    {
+        name = RequireName(name, "name");
+        var project = _connector.RequireProject();
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            var args = project.Materials.CreateNewEntityArgs();
+            args.TypeId = RengaIds.Material;
+            var entity = project.Materials.Create(args)
+                ?? throw new RengaException("Renga did not create the material. " + _connector.LastError);
+
+            var container = entity as IParameterContainer
+                ?? entity.GetInterfaceByName("IParameterContainer") as IParameterContainer
+                ?? throw new RengaException("The created material does not expose IParameterContainer.");
+
+            SetContainerString(container, RengaParams.EntityName, name);
+            if (density is double value)
+            {
+                SetContainerDouble(container, RengaParams.MassDensity, value);
+            }
+
+            op.Apply();
+            applied = true;
+
+            return new Dictionary<string, object?>
+            {
+                ["created"] = true,
+                ["id"] = entity.Id,
+                ["uniqueId"] = entity.UniqueIdS,
+                ["name"] = name,
+                ["density"] = density
+            };
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
     }
 
     private object RebuildSeed(IProject project, IModel model)
@@ -1501,6 +1886,814 @@ public sealed class RengaModelService
         return value;
     }
 
+    private static Dictionary<string, object?> DescribeObject(IModelObject obj)
+    {
+        var result = new Dictionary<string, object?>
+        {
+            ["id"] = obj.Id,
+            ["uniqueId"] = obj.UniqueIdS,
+            ["typeId"] = obj.ObjectTypeS,
+            ["typeName"] = TypeName(obj.ObjectType),
+            ["name"] = obj.Name
+        };
+
+        if (obj is ILevel level)
+        {
+            result["levelName"] = level.LevelName;
+            result["elevation"] = Units.ToMeters(level.Elevation);
+        }
+
+        if (obj is ILevelObject levelObject)
+        {
+            result["levelId"] = levelObject.LevelId;
+            result["elevationAboveLevel"] = Units.ToMeters(levelObject.ElevationAboveLevel);
+        }
+
+        if (obj is IHostObject host)
+        {
+            try
+            {
+                result["dependentIds"] = host.GetDependentObjectIds();
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, object?>[] DescribeParameters(IModelObject obj, IProject project)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        IParameterContainer? container;
+        try
+        {
+            container = obj.GetParameters();
+        }
+        catch
+        {
+            return Array.Empty<Dictionary<string, object?>>();
+        }
+
+        if (container is null)
+        {
+            return Array.Empty<Dictionary<string, object?>>();
+        }
+
+        var ids = container.GetIds();
+        for (var i = 0; i < ids.Count; i++)
+        {
+            IParameter parameter;
+            try
+            {
+                parameter = container.Get(ids.Get(i));
+            }
+            catch
+            {
+                continue;
+            }
+
+            var definition = parameter.Definition;
+            var parameterType = definition?.ParameterType ?? ParameterType.ParameterType_Undefined;
+            var rawValue = GetRawParameterValue(parameter);
+            var (value, unit) = ToHumanParameterValue(rawValue, parameterType);
+            var referencedName = rawValue is int referencedId
+                ? ResolveReferencedName(project, referencedId, definition?.Name ?? string.Empty)
+                : null;
+
+            string[] enumeration;
+            try
+            {
+                enumeration = definition?.EnumerationItemTexts ?? Array.Empty<string>();
+            }
+            catch
+            {
+                enumeration = Array.Empty<string>();
+            }
+
+            result.Add(new Dictionary<string, object?>
+            {
+                ["id"] = parameter.IdS,
+                ["name"] = definition?.Name,
+                ["text"] = definition?.Text,
+                ["group"] = definition?.GroupText,
+                ["parameterType"] = ParameterTypeName(parameterType),
+                ["valueType"] = ValueTypeName(parameter.ValueType),
+                ["hasValue"] = parameter.HasValue,
+                ["readOnly"] = parameter.IsReadOnly,
+                ["rawValue"] = rawValue,
+                ["value"] = value,
+                ["unit"] = unit,
+                ["referencedEntityType"] = definition?.ReferencedEntityTypeS,
+                ["referencedName"] = referencedName,
+                ["enumeration"] = enumeration
+            });
+        }
+
+        return result.ToArray();
+    }
+
+    private static Dictionary<string, object?>[] DescribeProperties(IModelObject obj)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        IPropertyContainer container;
+        try
+        {
+            container = obj.GetProperties();
+        }
+        catch
+        {
+            return Array.Empty<Dictionary<string, object?>>();
+        }
+
+        if (container is null)
+        {
+            return Array.Empty<Dictionary<string, object?>>();
+        }
+
+        var ids = container.GetIds();
+        for (var i = 0; i < ids.Count; i++)
+        {
+            IProperty property;
+            try
+            {
+                property = container.Get(ids.Get(i));
+            }
+            catch
+            {
+                continue;
+            }
+
+            var hasValue = false;
+            try
+            {
+                hasValue = property.HasValue();
+            }
+            catch
+            {
+                // ignored
+            }
+
+            object? value = null;
+            string? unit = null;
+            if (hasValue)
+            {
+                try
+                {
+                    (value, unit) = GetPropertyValue(property);
+                }
+                catch
+                {
+                    // ignored
+                }
+            }
+
+            result.Add(new Dictionary<string, object?>
+            {
+                ["id"] = property.IdS,
+                ["name"] = property.Name,
+                ["type"] = PropertyTypeName(property.Type),
+                ["hasValue"] = hasValue,
+                ["value"] = value,
+                ["unit"] = unit
+            });
+        }
+
+        return result.ToArray();
+    }
+
+    private static (object? Value, string? Unit) GetPropertyValue(IProperty property) => property.Type switch
+    {
+        PropertyType.PropertyType_Double => (property.GetDoubleValue(), null),
+        PropertyType.PropertyType_String => (property.GetStringValue(), null),
+        PropertyType.PropertyType_Angle => (property.GetAngleValue(AngleUnit.AngleUnit_Degrees), "deg"),
+        PropertyType.PropertyType_Area => (property.GetAreaValue(AreaUnit.AreaUnit_Meters2), "m2"),
+        PropertyType.PropertyType_Boolean => (property.GetBooleanValue(), null),
+        PropertyType.PropertyType_Enumeration => (property.GetEnumerationValue(), null),
+        PropertyType.PropertyType_Integer => (property.GetIntegerValue(), null),
+        PropertyType.PropertyType_Length => (property.GetLengthValue(LengthUnit.LengthUnit_Meters), "m"),
+        PropertyType.PropertyType_Logical => (property.GetLogicalValue().ToString(), null),
+        PropertyType.PropertyType_Mass => (property.GetMassValue(MassUnit.MassUnit_Kilograms), "kg"),
+        PropertyType.PropertyType_Volume => (property.GetVolumeValue(VolumeUnit.VolumeUnit_Meters3), "m3"),
+        _ => (null, null)
+    };
+
+    private static object? GetRawParameterValue(IParameter parameter) => parameter.ValueType switch
+    {
+        ParameterValueType.ParameterValueType_Bool => parameter.GetBoolValue(),
+        ParameterValueType.ParameterValueType_Int => parameter.GetIntValue(),
+        ParameterValueType.ParameterValueType_Double => parameter.GetDoubleValue(),
+        ParameterValueType.ParameterValueType_String => parameter.GetStringValue(),
+        _ => null
+    };
+
+    private static (object? Value, string? Unit) ToHumanParameterValue(
+        object? rawValue,
+        ParameterType parameterType)
+    {
+        if (rawValue is not double number)
+        {
+            return (rawValue, null);
+        }
+
+        return parameterType switch
+        {
+            ParameterType.ParameterType_Length => (number / Units.MillimetersPerMeter, "m"),
+            ParameterType.ParameterType_Elevation => (number / Units.MillimetersPerMeter, "m"),
+            ParameterType.ParameterType_Angle => (number, "deg"),
+            ParameterType.ParameterType_Area => (number, "m2"),
+            ParameterType.ParameterType_Volume => (number, "m3"),
+            ParameterType.ParameterType_Mass => (number, "kg"),
+            ParameterType.ParameterType_Temperature => (number, "C"),
+            ParameterType.ParameterType_Density => (number, "kg/m3"),
+            ParameterType.ParameterType_ThermalConductivity => (number, "W/mK"),
+            ParameterType.ParameterType_Voltage => (number, "V"),
+            ParameterType.ParameterType_Pressure => (number, "Pa"),
+            _ => (number, null)
+        };
+    }
+
+    private static IParameter? FindParameter(IParameterContainer container, string nameOrId)
+    {
+        if (Guid.TryParse(nameOrId, out var guid))
+        {
+            return container.Contains(guid) ? container.Get(guid) : null;
+        }
+
+        var normalized = nameOrId.Trim().Trim('{', '}');
+        var ids = container.GetIds();
+        for (var i = 0; i < ids.Count; i++)
+        {
+            var parameter = container.Get(ids.Get(i));
+            var definition = parameter.Definition;
+            if (string.Equals(definition?.Name, nameOrId, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(definition?.Text, nameOrId, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(parameter.IdS.Trim().Trim('{', '}'), normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                return parameter;
+            }
+        }
+
+        return null;
+    }
+
+    private static object ParseJsonParameterValue(JsonElement value, IParameter parameter)
+    {
+        if (value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            throw new RengaException("Parameter value must not be null.");
+        }
+
+        return parameter.ValueType switch
+        {
+            ParameterValueType.ParameterValueType_Bool => ParseBool(value),
+            ParameterValueType.ParameterValueType_Int => ParseInt(value),
+            ParameterValueType.ParameterValueType_Double => ParseDouble(value),
+            ParameterValueType.ParameterValueType_String => ParseString(value),
+            _ => throw new RengaException("Unsupported parameter value type.")
+        };
+    }
+
+    private static object ParseBool(JsonElement value)
+    {
+        if (value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            return value.GetBoolean();
+        }
+
+        if (value.ValueKind == JsonValueKind.String &&
+            bool.TryParse(value.GetString(), out var parsed))
+        {
+            return parsed;
+        }
+
+        throw new RengaException("Boolean parameter requires true or false.");
+    }
+
+    private static object ParseInt(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
+        {
+            return number;
+        }
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            return value.GetString() ?? string.Empty;
+        }
+
+        throw new RengaException("Integer parameter requires an integer or a name.");
+    }
+
+    private static object ParseDouble(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number))
+        {
+            return number;
+        }
+
+        if (value.ValueKind == JsonValueKind.String &&
+            double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number))
+        {
+            return number;
+        }
+
+        throw new RengaException("Double parameter requires a finite number.");
+    }
+
+    private static object ParseString(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? string.Empty,
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => throw new RengaException("String parameter requires a string value.")
+        };
+    }
+
+    private object ApplyParameterValue(
+        IProject project,
+        IModelObject obj,
+        IParameter parameter,
+        object value,
+        string? unit)
+    {
+        if (parameter.IsReadOnly)
+        {
+            throw new RengaException(
+                $"Parameter '{parameter.Definition?.Name ?? parameter.IdS}' is read-only.");
+        }
+
+        var definition = parameter.Definition;
+        var parameterType = definition?.ParameterType ?? ParameterType.ParameterType_Undefined;
+        var oldRaw = GetRawParameterValue(parameter);
+        var (oldValue, oldUnit) = ToHumanParameterValue(oldRaw, parameterType);
+
+        var op = StartOperation(project);
+        var applied = false;
+        try
+        {
+            switch (parameter.ValueType)
+            {
+                case ParameterValueType.ParameterValueType_Bool:
+                    parameter.SetBoolValue(ToBoolean(value));
+                    break;
+                case ParameterValueType.ParameterValueType_Int:
+                    parameter.SetIntValue(ToInt32(project, parameter, value));
+                    break;
+                case ParameterValueType.ParameterValueType_Double:
+                    parameter.SetDoubleValue(ToRawDouble(ToDouble(value), parameterType, unit));
+                    break;
+                case ParameterValueType.ParameterValueType_String:
+                    parameter.SetStringValue(ToStringValue(value, definition));
+                    break;
+                default:
+                    throw new RengaException("Unsupported parameter value type.");
+            }
+
+            op.Apply();
+            applied = true;
+        }
+        catch
+        {
+            if (!applied)
+            {
+                TryRollback(op);
+            }
+
+            throw;
+        }
+
+        var newRaw = GetRawParameterValue(parameter);
+        var (newValue, newUnit) = ToHumanParameterValue(newRaw, parameterType);
+
+        return new Dictionary<string, object?>
+        {
+            ["updated"] = true,
+            ["objectId"] = obj.Id,
+            ["objectType"] = obj.ObjectTypeS,
+            ["parameterId"] = parameter.IdS,
+            ["parameterName"] = definition?.Name,
+            ["parameterType"] = ParameterTypeName(parameterType),
+            ["valueType"] = ValueTypeName(parameter.ValueType),
+            ["oldRawValue"] = oldRaw,
+            ["oldValue"] = oldValue,
+            ["oldUnit"] = oldUnit,
+            ["newRawValue"] = newRaw,
+            ["newValue"] = newValue,
+            ["newUnit"] = newUnit
+        };
+    }
+
+    private static bool ToBoolean(object value)
+    {
+        if (value is bool boolean)
+        {
+            return boolean;
+        }
+
+        if (value is string text)
+        {
+            if (bool.TryParse(text, out var parsed))
+            {
+                return parsed;
+            }
+
+            if (text == "1")
+            {
+                return true;
+            }
+
+            if (text == "0")
+            {
+                return false;
+            }
+        }
+
+        throw new RengaException("Boolean parameter value is invalid.");
+    }
+
+    private static double ToDouble(object value)
+    {
+        return value switch
+        {
+            double number => number,
+            int number => number,
+            long number => number,
+            float number => number,
+            string text when double.TryParse(
+                text,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var parsed) => parsed,
+            _ => throw new RengaException("Double parameter value is invalid.")
+        };
+    }
+
+    private static int ToInt32(IProject project, IParameter parameter, object value)
+    {
+        if (value is int number)
+        {
+            return number;
+        }
+
+        if (value is long longNumber)
+        {
+            return checked((int)longNumber);
+        }
+
+        if (value is double doubleNumber)
+        {
+            return checked((int)doubleNumber);
+        }
+
+        if (value is string text)
+        {
+            if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            {
+                return parsed;
+            }
+
+            var resolved = ResolveEntityIdByName(
+                project,
+                parameter.Definition?.Name ?? string.Empty,
+                text);
+            if (resolved is int id)
+            {
+                return id;
+            }
+        }
+
+        throw new RengaException("Integer parameter value is invalid.");
+    }
+
+    private static string ToStringValue(object value, IParameterDefinition? definition)
+    {
+        var text = value switch
+        {
+            string stringValue => stringValue,
+            bool boolean => boolean ? "true" : "false",
+            int number => number.ToString(CultureInfo.InvariantCulture),
+            long number => number.ToString(CultureInfo.InvariantCulture),
+            double number => number.ToString(CultureInfo.InvariantCulture),
+            _ => value.ToString() ?? string.Empty
+        };
+
+        string[] enumeration;
+        try
+        {
+            enumeration = definition?.EnumerationItemTexts ?? Array.Empty<string>();
+        }
+        catch
+        {
+            enumeration = Array.Empty<string>();
+        }
+
+        if (enumeration.Length > 0 &&
+            !enumeration.Any(item => string.Equals(item, text, StringComparison.Ordinal)))
+        {
+            throw new RengaException(
+                $"Value '{text}' is not allowed. Available values: {string.Join(", ", enumeration)}.");
+        }
+
+        return text;
+    }
+
+    private static double ToRawDouble(double value, ParameterType parameterType, string? unit)
+    {
+        var normalized = unit?.Trim().ToLowerInvariant();
+        return parameterType switch
+        {
+            ParameterType.ParameterType_Length or ParameterType.ParameterType_Elevation => normalized switch
+            {
+                null or "" or "m" => value * Units.MillimetersPerMeter,
+                "mm" => value,
+                "cm" => value * 10,
+                "raw" => value,
+                _ => throw new RengaException("Length unit must be m, mm, cm, or raw.")
+            },
+            ParameterType.ParameterType_Angle => normalized switch
+            {
+                null or "" or "deg" => value,
+                "rad" => value * 180.0 / Math.PI,
+                "raw" => value,
+                _ => throw new RengaException("Angle unit must be deg, rad, or raw.")
+            },
+            ParameterType.ParameterType_Area => normalized switch
+            {
+                null or "" or "m2" => value,
+                "cm2" => value / 10_000.0,
+                "mm2" => value / 1_000_000.0,
+                "raw" => value,
+                _ => throw new RengaException("Area unit must be m2, cm2, mm2, or raw.")
+            },
+            ParameterType.ParameterType_Volume => normalized switch
+            {
+                null or "" or "m3" => value,
+                "cm3" => value / 1_000_000.0,
+                "mm3" => value / 1_000_000_000.0,
+                "raw" => value,
+                _ => throw new RengaException("Volume unit must be m3, cm3, mm3, or raw.")
+            },
+            ParameterType.ParameterType_Mass => normalized switch
+            {
+                null or "" or "kg" => value,
+                "g" => value / 1_000.0,
+                "t" => value * 1_000.0,
+                "raw" => value,
+                _ => throw new RengaException("Mass unit must be kg, g, t, or raw.")
+            },
+            _ => value
+        };
+    }
+
+    private static string? ResolveReferencedName(IProject project, int id, string parameterName)
+    {
+        try
+        {
+            if (parameterName.Contains("LayeredMaterial", StringComparison.OrdinalIgnoreCase))
+            {
+                return FindEntityName(project.LayeredMaterials, id);
+            }
+
+            if (parameterName.EndsWith("MaterialId", StringComparison.OrdinalIgnoreCase))
+            {
+                return FindEntityName(project.Materials, id);
+            }
+
+            if (string.Equals(parameterName, "LevelId", StringComparison.OrdinalIgnoreCase))
+            {
+                var level = FindObject(project.Model, id);
+                return level is ILevel nativeLevel ? nativeLevel.LevelName : null;
+            }
+
+            var collection = parameterName switch
+            {
+                "DoorStyleId" => project.DoorStyles,
+                "WindowStyleId" => project.WindowStyles,
+                "BeamStyleId" => project.BeamStyles,
+                "ColumnStyleId" => project.ColumnStyles,
+                "PlateStyleId" => project.PlateStyles,
+                "ElementStyleId" => project.ElementStyles,
+                "SystemStyleId" => project.SystemStyles,
+                _ => null
+            };
+
+            return collection is null ? null : FindEntityName(collection, id);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static int? ResolveEntityIdByName(IProject project, string parameterName, string name)
+    {
+        try
+        {
+            IEntityCollection? collection = null;
+            if (parameterName.Contains("LayeredMaterial", StringComparison.OrdinalIgnoreCase))
+            {
+                collection = project.LayeredMaterials;
+            }
+            else if (parameterName.EndsWith("MaterialId", StringComparison.OrdinalIgnoreCase))
+            {
+                collection = project.Materials;
+            }
+            else
+            {
+                collection = parameterName switch
+                {
+                    "DoorStyleId" => project.DoorStyles,
+                    "WindowStyleId" => project.WindowStyles,
+                    "BeamStyleId" => project.BeamStyles,
+                    "ColumnStyleId" => project.ColumnStyles,
+                    "PlateStyleId" => project.PlateStyles,
+                    "ElementStyleId" => project.ElementStyles,
+                    "SystemStyleId" => project.SystemStyles,
+                    _ => null
+                };
+            }
+
+            if (collection is null)
+            {
+                return null;
+            }
+
+            for (var i = 0; i < collection.Count; i++)
+            {
+                var entity = collection.GetByIndex(i);
+                if (string.Equals(entity.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return entity.Id;
+                }
+            }
+        }
+        catch
+        {
+            // ignored
+        }
+
+        return null;
+    }
+
+    private static string? FindEntityName(IEntityCollection collection, int id)
+    {
+        try
+        {
+            var entity = collection.GetById(id);
+            return entity?.Name;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static IEntity? FindEntityById(IEntityCollection collection, int id)
+    {
+        try
+        {
+            return collection.GetById(id);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void SetContainerString(IParameterContainer container, Guid parameterId, string value)
+    {
+        if (!container.Contains(parameterId))
+        {
+            throw new RengaException($"Parameter {parameterId:B} is not available.");
+        }
+
+        var parameter = container.Get(parameterId);
+        if (parameter.IsReadOnly)
+        {
+            throw new RengaException($"Parameter {parameterId:B} is read-only.");
+        }
+
+        parameter.SetStringValue(value);
+    }
+
+    private static void SetContainerDouble(IParameterContainer container, Guid parameterId, double value)
+    {
+        if (!container.Contains(parameterId))
+        {
+            throw new RengaException($"Parameter {parameterId:B} is not available.");
+        }
+
+        var parameter = container.Get(parameterId);
+        if (parameter.IsReadOnly)
+        {
+            throw new RengaException($"Parameter {parameterId:B} is read-only.");
+        }
+
+        parameter.SetDoubleValue(value);
+    }
+
+    private static string TypeName(Guid type)
+    {
+        foreach (var pair in FriendlyTypeNames)
+        {
+            if (pair.Value == type)
+            {
+                return pair.Key;
+            }
+        }
+
+        return type.ToString("B");
+    }
+
+    private static string ParameterTypeName(ParameterType type)
+    {
+        var text = type.ToString();
+        return text.StartsWith("ParameterType_", StringComparison.Ordinal)
+            ? text["ParameterType_".Length..]
+            : text;
+    }
+
+    private static string ValueTypeName(ParameterValueType type)
+    {
+        var text = type.ToString();
+        return text.StartsWith("ParameterValueType_", StringComparison.Ordinal)
+            ? text["ParameterValueType_".Length..]
+            : text;
+    }
+
+    private static string PropertyTypeName(PropertyType type)
+    {
+        var text = type.ToString();
+        return text.StartsWith("PropertyType_", StringComparison.Ordinal)
+            ? text["PropertyType_".Length..]
+            : text;
+    }
+
+    private static string QuantityTypeName(QuantityType type)
+    {
+        var text = type.ToString();
+        return text.StartsWith("QuantityType_", StringComparison.Ordinal)
+            ? text["QuantityType_".Length..]
+            : text;
+    }
+
+    private static readonly Dictionary<string, Guid> FriendlyTypeNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["level"] = RengaIds.Level,
+        ["axis"] = RengaIds.Axis,
+        ["wall"] = RengaIds.Wall,
+        ["column"] = RengaIds.Column,
+        ["beam"] = RengaIds.Beam,
+        ["floor"] = RengaIds.Floor,
+        ["roof"] = RengaIds.Roof,
+        ["door"] = RengaIds.Door,
+        ["window"] = RengaIds.Window,
+        ["opening"] = RengaIds.Opening,
+        ["plate"] = RengaIds.Plate,
+        ["room"] = RengaIds.Room,
+        ["stair"] = RengaIds.Stair,
+        ["railing"] = RengaIds.Railing,
+        ["ramp"] = RengaIds.Ramp,
+        ["wallfoundation"] = RengaIds.WallFoundation,
+        ["isolatedfoundation"] = RengaIds.IsolatedFoundation,
+        ["element"] = RengaIds.Element,
+        ["material"] = RengaIds.Material,
+        ["line3d"] = RengaIds.Line3D
+    };
+
+    private static readonly Dictionary<string, Func<IProject, IEntityCollection>> StyleCollections =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["beam"] = project => project.BeamStyles,
+            ["column"] = project => project.ColumnStyles,
+            ["door"] = project => project.DoorStyles,
+            ["window"] = project => project.WindowStyles,
+            ["plate"] = project => project.PlateStyles,
+            ["element"] = project => project.ElementStyles,
+            ["equipment"] = project => project.EquipmentStyles,
+            ["mechanical_equipment"] = project => project.MechanicalEquipmentStyles,
+            ["plumbing_fixture"] = project => project.PlumbingFixtureStyles,
+            ["lighting_fixture"] = project => project.LightingFixtureStyles,
+            ["wiring_accessory"] = project => project.WiringAccessoryStyles,
+            ["electric_distribution_board"] = project => project.ElectricDistributionBoardStyles,
+            ["pipe"] = project => project.PipeStyles,
+            ["pipe_fitting"] = project => project.PipeFittingStyles,
+            ["pipe_accessory"] = project => project.PipeAccessoryStyles,
+            ["duct"] = project => project.DuctStyles,
+            ["duct_fitting"] = project => project.DuctFittingStyles,
+            ["duct_accessory"] = project => project.DuctAccessoryStyles,
+            ["electrical_circuit_line"] = project => project.ElectricalCircuitLineStyles,
+            ["system"] = project => project.SystemStyles,
+            ["material"] = project => project.Materials,
+            ["layered_material"] = project => project.LayeredMaterials
+        };
+
     private sealed record ResolvedLevel(IModelObject Obj, int Id, string Name, double ElevationMm);
 
     private sealed class SeedState
@@ -1512,4 +2705,8 @@ public sealed class RengaModelService
         public bool Managed { get; set; }
     }
 }
+
+
+
+
 

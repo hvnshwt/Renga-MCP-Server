@@ -11,6 +11,16 @@ public static class RengaIds
     public static readonly Guid Roof = new("bac4470f-d560-4f57-a49e-faa5f6e5a279");
     public static readonly Guid Door = new("1cfba99c-01e7-4078-ae1a-3e2ff0673599");
     public static readonly Guid Window = new("2b02b353-2ca5-4566-88bb-917ea8460174");
+    public static readonly Guid Material = new("0abcb18f-0aaf-4509-bf89-5c5fad9d5d8b");
+    public static readonly Guid Opening = new("fc443d5a-b76c-45e5-b91c-520ef0896109");
+    public static readonly Guid Plate = new("62cf086e-5a39-4484-840c-ffa6a1c6e2b7");
+    public static readonly Guid Room = new("f1a805ff-573d-f46b-ffba-57f4bccaa6ed");
+    public static readonly Guid Stair = new("3f522f49-aee2-4d73-9866-9b07cf336a69");
+    public static readonly Guid Railing = new("a1aca786-78a4-4015-b412-9150baad71a9");
+    public static readonly Guid Ramp = new("debde004-afcc-4da8-8dd0-4223ff836acd");
+    public static readonly Guid WallFoundation = new("d7dd0293-dd65-4229-a64c-8b528d4e226f");
+    public static readonly Guid IsolatedFoundation = new("6063816c-89ff-4c8f-a814-3be6cb94128e");
+    public static readonly Guid Element = new("e1e3bd66-2e13-4fa4-a9eb-677e03067c2f");
     public static readonly Guid Line3D = new("02bbebe8-e28b-4ee5-8916-11b514a35dca");
 }
 
@@ -31,6 +41,11 @@ public static class RengaParams
     public static readonly Guid WindowWidth = new("bb780525-6156-4a7c-8010-0fd88ced8979");
     public static readonly Guid WindowHeight = new("c30a59c6-8bc7-4e33-befa-cd932735f84b");
     public static readonly Guid RoofThickness = new("b3bf56bc-b9c0-4554-93c2-67e7362468af");
+    public static readonly Guid EntityName = new("7b57355d-ed38-4ad3-91db-ab538a9c1d98");
+    public static readonly Guid MassDensity = new("469788e6-d7a6-4f73-90cc-fa756b14bc5c");
+    public static readonly Guid MaterialId = new("d5c738c4-7ffa-46cc-a440-52ba62de6ae0");
+    public static readonly Guid LayeredMaterialId = new("2cbc4964-61a0-4553-8103-36e2dd2ab31c");
+    public static readonly Guid Color = new("87d2df84-d69e-495f-a46e-4468185268c3");
 }
 
 public static class Units

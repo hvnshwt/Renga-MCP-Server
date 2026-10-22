@@ -123,7 +123,8 @@ public static class ToolCatalog
                 "x2": { "type": "number", "description": "Baseline end X in meters." },
                 "y2": { "type": "number", "description": "Baseline end Y in meters." },
                 "levelId": { "type": "integer", "description": "Local ID of the host level." },
-                "height": { "type": "number", "description": "Wall height in meters." }
+                "height": { "type": "number", "description": "Wall height in meters." },
+                "thickness": { "type": "number", "description": "Optional wall thickness in meters. Uses the Renga default when omitted." }
               },
               "required": ["x1", "y1", "x2", "y2", "levelId", "height"],
               "additionalProperties": false
@@ -141,7 +142,8 @@ public static class ToolCatalog
                 "y": { "type": "number", "description": "Column Y in meters." },
                 "height": { "type": "number", "description": "Column height in meters." },
                 "levelId": { "type": "integer", "description": "Optional local ID of the host level." },
-                "elevation": { "type": "number", "description": "Optional absolute column base elevation in meters." }
+                "elevation": { "type": "number", "description": "Optional absolute column base elevation in meters." },
+                "styleId": { "type": "integer", "description": "Optional column style ID. Use renga_list_styles with kind 'column'." }
               },
               "required": ["x", "y", "height"],
               "additionalProperties": false
@@ -161,7 +163,8 @@ public static class ToolCatalog
                 "x2": { "type": "number", "description": "End X in meters." },
                 "y2": { "type": "number", "description": "End Y in meters." },
                 "z2": { "type": "number", "description": "End Z in meters." },
-                "levelId": { "type": "integer", "description": "Optional local ID of the host level." }
+                "levelId": { "type": "integer", "description": "Optional local ID of the host level." },
+                "styleId": { "type": "integer", "description": "Optional beam style ID. Use renga_list_styles with kind 'beam'." }
               },
               "required": ["x1", "y1", "z1", "x2", "y2", "z2"],
               "additionalProperties": false
@@ -180,7 +183,8 @@ public static class ToolCatalog
                 "y": { "type": "number", "description": "Door center Y on the wall, in meters." },
                 "width": { "type": "number", "description": "Door width in meters." },
                 "height": { "type": "number", "description": "Door height in meters." },
-                "offset": { "type": "number", "description": "Optional vertical offset from the level in meters. Default 0." }
+                "offset": { "type": "number", "description": "Optional vertical offset from the level in meters. Default 0." },
+                "styleId": { "type": "integer", "description": "Optional door style ID. Use renga_list_styles with kind 'door'. Default 0 means no style." }
               },
               "required": ["wallId", "x", "y", "width", "height"],
               "additionalProperties": false
@@ -199,7 +203,8 @@ public static class ToolCatalog
                 "y": { "type": "number", "description": "Window center Y on the wall, in meters." },
                 "width": { "type": "number", "description": "Window width in meters." },
                 "height": { "type": "number", "description": "Window height in meters." },
-                "sill": { "type": "number", "description": "Optional sill height from the level in meters. Default 0.9." }
+                "sill": { "type": "number", "description": "Optional sill height from the level in meters. Default 0.9." },
+                "styleId": { "type": "integer", "description": "Optional window style ID. Use renga_list_styles with kind 'window'. Default 0 means no style." }
               },
               "required": ["wallId", "x", "y", "width", "height"],
               "additionalProperties": false
@@ -267,6 +272,125 @@ public static class ToolCatalog
                 "y2": { "type": "number", "description": "Rectangle corner 2 Y in meters." }
               },
               "required": ["levelId", "thickness"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_list_objects",
+            "List model objects",
+            "Lists model objects with local IDs, unique IDs, types, names, and host level IDs. Optionally filters by type name or type GUID.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string", "description": "Optional type name (wall, door, window, level, ...) or type GUID." },
+                "limit": { "type": "integer", "description": "Optional maximum number of objects. Default 500." }
+              },
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_get_object",
+            "Get object details",
+            "Returns object identity, host information, parameters, custom properties, and quantities.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Local model object ID." },
+                "includeProperties": { "type": "boolean", "description": "Include custom properties. Default true." }
+              },
+              "required": ["objectId"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_list_parameters",
+            "List object parameters",
+            "Lists all native parameters of an object with GUIDs, names, types, read-only state, raw values, and human-readable values.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Local model object ID." }
+              },
+              "required": ["objectId"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_set_parameter",
+            "Set an object parameter",
+            "Sets a native parameter by GUID or name. Length and elevation values default to meters, angles to degrees, area to m2, volume to m3, mass to kg. Use unit to override.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Local model object ID." },
+                "parameter": { "type": "string", "description": "Parameter GUID or parameter name." },
+                "value": { "type": ["number", "string", "boolean"], "description": "New parameter value." },
+                "unit": { "type": "string", "description": "Optional unit: m, mm, cm, deg, rad, m2, mm2, cm2, m3, mm3, cm3, kg, g, t, or raw." }
+              },
+              "required": ["objectId", "parameter", "value"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_list_materials",
+            "List materials",
+            "Lists simple materials and layered materials available in the project.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "description": "Optional filter: all, material, or layered." },
+                "limit": { "type": "integer", "description": "Optional maximum number of items per collection. Default 500." }
+              },
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_list_styles",
+            "List styles",
+            "Lists style collections and their items. Without kind it returns collection names and counts; with kind it returns style IDs and names.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "description": "Optional style kind: beam, column, door, window, plate, element, pipe, duct, material, layered_material, and others." },
+                "limit": { "type": "integer", "description": "Optional maximum number of items. Default 500." }
+              },
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_assign_material",
+            "Assign a material",
+            "Assigns a simple material or layered material to an object. Columns and beams typically use MaterialId; walls, floors, and roofs use LayeredMaterialId.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Local model object ID." },
+                "materialId": { "type": "integer", "description": "Material or layered material local ID." },
+                "layered": { "type": "boolean", "description": "Optional explicit flag: true for layered material, false for simple material." }
+              },
+              "required": ["objectId", "materialId"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_material",
+            "Create a material",
+            "Creates a simple material in the project. Walls, floors, and roofs require layered materials for material assignment.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string", "description": "Material name." },
+                "density": { "type": "number", "description": "Optional mass density in kg/m3." }
+              },
+              "required": ["name"],
               "additionalProperties": false
             }
             """),

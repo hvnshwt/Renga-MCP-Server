@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -286,13 +286,15 @@ public sealed class McpServer
             RequireDouble(args, "x2"),
             RequireDouble(args, "y2"),
             RequireInt(args, "levelId"),
-            RequireDouble(args, "height")),
+            RequireDouble(args, "height"),
+            OptionalDouble(args, "thickness")),
         "renga_create_column" => _service.CreateColumn(
             RequireDouble(args, "x"),
             RequireDouble(args, "y"),
             RequireDouble(args, "height"),
             OptionalInt(args, "levelId"),
-            OptionalDouble(args, "elevation")),
+            OptionalDouble(args, "elevation"),
+            OptionalInt(args, "styleId")),
         "renga_create_beam" => _service.CreateBeam(
             RequireDouble(args, "x1"),
             RequireDouble(args, "y1"),
@@ -300,21 +302,24 @@ public sealed class McpServer
             RequireDouble(args, "x2"),
             RequireDouble(args, "y2"),
             RequireDouble(args, "z2"),
-            OptionalInt(args, "levelId")),
+            OptionalInt(args, "levelId"),
+            OptionalInt(args, "styleId")),
         "renga_create_door" => _service.CreateDoor(
             RequireInt(args, "wallId"),
             RequireDouble(args, "x"),
             RequireDouble(args, "y"),
             RequireDouble(args, "width"),
             RequireDouble(args, "height"),
-            OptionalDouble(args, "offset")),
+            OptionalDouble(args, "offset"),
+            OptionalInt(args, "styleId")),
         "renga_create_window" => _service.CreateWindow(
             RequireInt(args, "wallId"),
             RequireDouble(args, "x"),
             RequireDouble(args, "y"),
             RequireDouble(args, "width"),
             RequireDouble(args, "height"),
-            OptionalDouble(args, "sill")),
+            OptionalDouble(args, "sill"),
+            OptionalInt(args, "styleId")),
         "renga_create_roof" => _service.CreateRoof(
             RequireInt(args, "levelId"),
             RequireDouble(args, "thickness"),
@@ -332,6 +337,31 @@ public sealed class McpServer
             OptionalDouble(args, "y1"),
             OptionalDouble(args, "x2"),
             OptionalDouble(args, "y2")),
+        "renga_list_objects" => _service.ListObjects(
+            OptionalString(args, "type"),
+            OptionalInt(args, "limit")),
+        "renga_get_object" => _service.GetObject(
+            RequireInt(args, "objectId"),
+            OptionalBool(args, "includeProperties") ?? true),
+        "renga_list_parameters" => _service.ListParameters(RequireInt(args, "objectId")),
+        "renga_set_parameter" => _service.SetParameter(
+            RequireInt(args, "objectId"),
+            RequireString(args, "parameter"),
+            RequireValue(args, "value"),
+            OptionalString(args, "unit")),
+        "renga_list_materials" => _service.ListMaterials(
+            OptionalString(args, "kind"),
+            OptionalInt(args, "limit")),
+        "renga_list_styles" => _service.ListStyles(
+            OptionalString(args, "kind"),
+            OptionalInt(args, "limit")),
+        "renga_assign_material" => _service.AssignMaterial(
+            RequireInt(args, "objectId"),
+            RequireInt(args, "materialId"),
+            OptionalBool(args, "layered")),
+        "renga_create_material" => _service.CreateMaterial(
+            RequireString(args, "name"),
+            OptionalDouble(args, "density")),
         "renga_save_project" => _service.SaveProject(RequireString(args, "path")),
         "renga_export_ifc" => _service.ExportIfc(RequireString(args, "path")),
         _ => throw new RengaException($"Unknown tool: {name}")
@@ -353,6 +383,51 @@ public sealed class McpServer
         }
 
         return value.GetString() ?? string.Empty;
+    }
+
+    private static string? OptionalString(JsonElement args, string name)
+    {
+        if (!TryGet(args, name, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw new RengaException($"Parameter '{name}' must be a string.");
+        }
+
+        return value.GetString();
+    }
+
+    private static bool? OptionalBool(JsonElement args, string name)
+    {
+        if (!TryGet(args, name, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            return value.GetBoolean();
+        }
+
+        if (value.ValueKind == JsonValueKind.String && bool.TryParse(value.GetString(), out var parsed))
+        {
+            return parsed;
+        }
+
+        throw new RengaException($"Parameter '{name}' must be a boolean.");
+    }
+
+    private static JsonElement RequireValue(JsonElement args, string name)
+    {
+        if (!TryGet(args, name, out var value))
+        {
+            throw new RengaException($"Parameter '{name}' is required.");
+        }
+
+        return value.Clone();
     }
 
     private static double RequireDouble(JsonElement args, string name)
@@ -555,3 +630,4 @@ public sealed class McpServer
     private static void Log(string message) =>
         Console.Error.WriteLine($"[renga-mcp] {DateTime.Now:HH:mm:ss} {message}");
 }
+
