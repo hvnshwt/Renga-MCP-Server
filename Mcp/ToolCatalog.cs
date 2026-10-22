@@ -495,7 +495,7 @@ public static class ToolCatalog
         new ToolSpec(
             "renga_get_object",
             "Get object details",
-            "Returns object identity, host information, parameters, custom properties, and quantities.",
+            "Returns object identity, host information, parameters, custom properties, and the 3D placement of level objects.",
             """
             {
               "type": "object",
@@ -1103,6 +1103,225 @@ public static class ToolCatalog
                 }
               },
               "required": ["path"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_delete_object",
+            "Delete a model object",
+            "Deletes a model object. When a host is deleted, Renga also deletes its dependent objects (door, window, opening, objects on a route, and so on). If dependents exist, the call fails unless confirmDependents is true. Returns requested, dependent, and actually deleted IDs plus the remaining object count.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Local model object ID." },
+                "confirmDependents": { "type": "boolean", "description": "Allow deleting dependent objects together with the host. Default false." }
+              },
+              "required": ["objectId"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_delete_objects",
+            "Delete several model objects",
+            "Deletes several model objects in one operation. Dependent objects are deleted with their hosts. If any requested object has dependents, the call fails unless confirmDependents is true. Returns dependent and actually deleted IDs plus the remaining object count.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectIds": { "type": "array", "items": { "type": "integer" }, "description": "Local model object IDs." },
+                "confirmDependents": { "type": "boolean", "description": "Allow deleting dependent objects together with their hosts. Default false." }
+              },
+              "required": ["objectIds"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_move_object",
+            "Move a model object",
+            "Moves a level object by dx, dy, and dz in meters using ILevelObject placement. Doors, windows, openings, rooms, MEP lines/routes, and hosts with dependent objects cannot be moved. The server verifies that Renga actually applied the new placement and reports the result.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Local model object ID." },
+                "dx": { "type": "number", "description": "Offset along global X in meters." },
+                "dy": { "type": "number", "description": "Offset along global Y in meters." },
+                "dz": { "type": "number", "description": "Vertical offset in meters, relative to the level." }
+              },
+              "required": ["objectId", "dx", "dy", "dz"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_rotate_object",
+            "Rotate a model object",
+            "Rotates a level object around its own origin about the global X, Y, or Z axis. The angle is in degrees. Doors, windows, openings, rooms, MEP lines/routes, and hosts with dependent objects cannot be rotated. The server verifies the result.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Local model object ID." },
+                "angle": { "type": "number", "description": "Rotation angle in degrees." },
+                "axis": { "type": "string", "enum": ["x", "y", "z"], "description": "Global rotation axis. Default z." }
+              },
+              "required": ["objectId", "angle"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_list_known_quantities",
+            "List known quantity IDs",
+            "Lists the known Renga quantity GUIDs with names, quantity types, and default units. Renga does not expose a way to enumerate quantity IDs, so this static catalog is used by renga_get_quantity and renga_get_quantities.",
+            """
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_get_quantity",
+            "Get one object quantity",
+            "Reads a quantity from an object by name or GUID. Use renga_list_known_quantities for the catalog. Units: m, mm, cm for lengths and elevations; m2, mm2, cm2 for areas; m3, mm3, cm3 for volumes; kg, g, t for mass; deg or rad for angles.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Local model object ID." },
+                "quantity": { "type": "string", "description": "Quantity name (NetVolume, GrossArea, ...) or GUID." },
+                "unit": { "type": "string", "description": "Optional output unit. Defaults to m, m2, m3, kg, deg, or count." }
+              },
+              "required": ["objectId", "quantity"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_get_quantities",
+            "Get object quantities",
+            "Reads several quantities from an object. Without a list, returns all supported quantities from the known catalog. Explicit names that are not supported are returned with supported=false; unknown names cause an error.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Local model object ID." },
+                "quantities": { "type": "array", "items": { "type": "string" }, "description": "Optional quantity names or GUIDs." }
+              },
+              "required": ["objectId"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_import_ifc",
+            "Import an IFC file as a new project",
+            "Imports an IFC file through IApplication.ImportIfcProject. The current project is closed without saving and replaced by the imported model. confirm must be true. Use renga_save_project before importing.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string", "description": "Absolute path to a .ifc file." },
+                "confirm": { "type": "boolean", "description": "Must be true: the current project is discarded." }
+              },
+              "required": ["path", "confirm"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_list_ifc_links",
+            "List IFC links",
+            "Lists IFC links and the model objects created from them. Returns link IDs, names, saved paths, link file type, and linked object IDs with placements. Also reports IfcModel objects that have no registered link.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "limit": { "type": "integer", "description": "Optional maximum number of links. Default 500." }
+              },
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_ifc_link",
+            "Link an IFC file into the model",
+            "Creates an IfcModel object linked to an IFC file in the current project. levelId selects the host level; when omitted, the level is chosen by z. z is an absolute elevation in meters. Renga reports the link file type and may refuse unsupported IFC versions.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string", "description": "Absolute path to a .ifc file." },
+                "levelId": { "type": "integer", "description": "Optional host level ID. When omitted, the nearest level to z is used." },
+                "x": { "type": "number", "description": "Insertion X in meters." },
+                "y": { "type": "number", "description": "Insertion Y in meters." },
+                "z": { "type": "number", "description": "Absolute insertion elevation in meters." },
+                "rotation": { "type": "number", "description": "Optional rotation around Z in degrees." }
+              },
+              "required": ["path", "x", "y", "z"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_export_objects_ifc",
+            "Export selected objects to IFC",
+            "Exports only the specified objects to IFC using IProject.ExportObjectsToIFC. Dependent objects and relationships are exported by Renga according to its own rules.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string", "description": "Destination .ifc file path." },
+                "objectIds": { "type": "array", "items": { "type": "integer" }, "description": "Local model object IDs to export." },
+                "overwrite": { "type": "boolean", "description": "Overwrite an existing file. Default true." }
+              },
+              "required": ["path", "objectIds"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_element_style",
+            "Create an element style from a 3D file",
+            "Creates an ElementStyle from a 3D file through INewEntityArgs.FilePath. Supported formats depend on the Renga license (for example .obj or .ifc). The file geometry defines the element; Renga returns an error when the format is not supported.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string", "description": "Style name." },
+                "filePath": { "type": "string", "description": "Absolute path to a supported 3D file." }
+              },
+              "required": ["name", "filePath"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_create_element",
+            "Create an element from a style",
+            "Creates a native Element on a level using an ElementStyle created from a 3D file. x and y are in meters; z is an absolute elevation in meters.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "levelId": { "type": "integer", "description": "Host level ID." },
+                "styleId": { "type": "integer", "description": "ElementStyle ID from renga_create_element_style or renga_list_styles kind=element." },
+                "x": { "type": "number", "description": "Insertion X in meters." },
+                "y": { "type": "number", "description": "Insertion Y in meters." },
+                "z": { "type": "number", "description": "Absolute insertion elevation in meters." },
+                "rotation": { "type": "number", "description": "Optional rotation around Z in degrees." }
+              },
+              "required": ["levelId", "styleId", "x", "y", "z"],
+              "additionalProperties": false
+            }
+            """),
+        new ToolSpec(
+            "renga_copy_object",
+            "Copy a simple model object",
+            "Recreates a wall, column, beam, floor, roof, or plate with an offset, copying its placement, baseline, style, material, and core dimensions. Renga has no universal clone API, so doors, windows, openings, rooms, MEP objects, and other types are not supported. Dependent objects are not copied.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "integer", "description": "Source object ID." },
+                "dx": { "type": "number", "description": "Offset along global X in meters." },
+                "dy": { "type": "number", "description": "Offset along global Y in meters." },
+                "dz": { "type": "number", "description": "Vertical offset in meters, relative to the level." }
+              },
+              "required": ["objectId", "dx", "dy", "dz"],
               "additionalProperties": false
             }
             """)

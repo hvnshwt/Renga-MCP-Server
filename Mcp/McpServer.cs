@@ -602,6 +602,61 @@ public sealed class McpServer
             OptionalInt(args, "conductorStyleId")),
         "renga_save_project" => _service.SaveProject(RequireString(args, "path")),
         "renga_export_ifc" => _service.ExportIfc(RequireString(args, "path")),
+        "renga_delete_object" => _service.DeleteObject(
+            RequireInt(args, "objectId"),
+            OptionalBool(args, "confirmDependents") ?? false),
+        "renga_delete_objects" => _service.DeleteObjects(
+            OptionalIntArray(args, "objectIds")
+                ?? throw new RengaException("Parameter 'objectIds' is required and must be an array of integers."),
+            OptionalBool(args, "confirmDependents") ?? false),
+        "renga_move_object" => _service.MoveObject(
+            RequireInt(args, "objectId"),
+            RequireDouble(args, "dx"),
+            RequireDouble(args, "dy"),
+            RequireDouble(args, "dz")),
+        "renga_rotate_object" => _service.RotateObject(
+            RequireInt(args, "objectId"),
+            RequireDouble(args, "angle"),
+            OptionalString(args, "axis")),
+        "renga_list_known_quantities" => _service.ListKnownQuantities(),
+        "renga_get_quantity" => _service.GetQuantity(
+            RequireInt(args, "objectId"),
+            RequireString(args, "quantity"),
+            OptionalString(args, "unit")),
+        "renga_get_quantities" => _service.GetQuantities(
+            RequireInt(args, "objectId"),
+            OptionalStringArray(args, "quantities")),
+        "renga_import_ifc" => _service.ImportIfc(
+            RequireString(args, "path"),
+            OptionalBool(args, "confirm") ?? false),
+        "renga_list_ifc_links" => _service.ListIfcLinks(OptionalInt(args, "limit")),
+        "renga_create_ifc_link" => _service.CreateIfcLink(
+            RequireString(args, "path"),
+            OptionalInt(args, "levelId"),
+            RequireDouble(args, "x"),
+            RequireDouble(args, "y"),
+            RequireDouble(args, "z"),
+            OptionalDouble(args, "rotation")),
+        "renga_export_objects_ifc" => _service.ExportObjectsIfc(
+            RequireString(args, "path"),
+            OptionalIntArray(args, "objectIds")
+                ?? throw new RengaException("Parameter 'objectIds' is required and must be an array of integers."),
+            OptionalBool(args, "overwrite")),
+        "renga_create_element_style" => _service.CreateElementStyle(
+            RequireString(args, "name"),
+            RequireString(args, "filePath")),
+        "renga_create_element" => _service.CreateElement(
+            RequireInt(args, "levelId"),
+            RequireInt(args, "styleId"),
+            RequireDouble(args, "x"),
+            RequireDouble(args, "y"),
+            RequireDouble(args, "z"),
+            OptionalDouble(args, "rotation")),
+        "renga_copy_object" => _service.CopyObject(
+            RequireInt(args, "objectId"),
+            RequireDouble(args, "dx"),
+            RequireDouble(args, "dy"),
+            RequireDouble(args, "dz")),
         _ => throw new RengaException($"Unknown tool: {name}")
     };
 
